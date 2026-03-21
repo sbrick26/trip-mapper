@@ -1527,7 +1527,7 @@ async function submitAddStop() {
     if (gToken) {
       btn.textContent = 'Syncing to Sheet…';
       await writeStopToSheet(addPanelDayId, slotVal, stop, insertAt);
-      await invalidateCache();
+      await updateCache();
     }
 
     closeAddPanel();
@@ -1698,7 +1698,7 @@ async function deleteStop(dayId, stopIdx) {
   renderMarkers(tripData.days);
   try {
     await deleteStopFromSheet(dayId, stopIdx, stop);
-    await invalidateCache();
+    await updateCache();
   } catch(e) {
     console.warn('[delete] Sheet remove failed (non-fatal):', e.message);
   }
@@ -1798,18 +1798,28 @@ async function deleteStopFromSheet(dayId, stopIdx, stop) {
   console.log('[sheets] ✓ Stop deleted from sheet row', sheetRow);
 }
 
-async function invalidateCache() {
-  if (!rawCSVData) return;
-  const hash = hashCSV(rawCSVData);
+async function updateCache() {
+  if (!rawCSVData || !tripData) return;
+  const oldHash = hashCSV(rawCSVData);
   try {
-    await fetch(`${WORKER_URL}/cache/delete`, {
+    const freshItinerary = await fetchSheetTab('Itinerary');
+    if (!freshItinerary || freshItinerary.length < 20) return;
+    rawCSVData = { ...rawCSVData, Itinerary: freshItinerary };
+    rowMap = buildRowMap(freshItinerary);
+    const newHash = hashCSV(rawCSVData);
+    await fetch(`${WORKER_URL}/cache`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hash })
+      body: JSON.stringify({ hash: newHash, data: tripData })
     });
-    console.log('[cache] Invalidated hash:', hash);
+    fetch(`${WORKER_URL}/cache/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash: oldHash })
+    }).catch(() => {});
+    console.log('[cache] Write-through: old', oldHash, '→ new', newHash);
   } catch(e) {
-    console.warn('[cache] Invalidation failed (non-fatal):', e.message);
+    console.warn('[cache] Write-through failed (non-fatal):', e.message);
   }
 }
 
