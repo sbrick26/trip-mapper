@@ -1265,14 +1265,16 @@ function revealApp() {
   document.getElementById('google-connect').style.display = 'none';
   document.getElementById('topbar').style.display = 'flex';
   document.getElementById('app').classList.add('show');
-  // Double rAF + timeout ensures container is fully laid out before fitting bounds
-  requestAnimationFrame(() => { requestAnimationFrame(() => {
+  // After display:none → display:flex/block, the container needs a
+  // full layout pass before Leaflet can read its real dimensions.
+  // setTimeout(0) defers past the current layout, then invalidateSize
+  // picks up the real width/height so fitBounds actually works.
+  setTimeout(() => {
     if (leafletMap) {
       leafletMap.invalidateSize();
-      // Re-render all markers so fitBounds runs with a properly sized container
       if (tripData && tripData.days) renderMarkers(tripData.days);
     }
-  }); });
+  }, 100);
   loadMapsAPI();
 }
 
@@ -2257,6 +2259,18 @@ function initMap(days) {
       }
       const sb = document.getElementById('sidebar');
       if (sb && window.innerWidth <= 768) sb.classList.remove('sheet-open');
+    });
+    // After the container first becomes visible and Leaflet detects its
+    // real size, re-fit bounds so the view is properly centered.
+    leafletMap.once('resize', () => {
+      if (tripData && tripData.days) {
+        const bounds = [];
+        tripData.days.forEach(day => {
+          (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180)
+            .forEach(s => bounds.push([s.lat, s.lng]));
+        });
+        if (bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds), {padding:[50,50], maxZoom:12});
+      }
     });
   }
   renderMarkers(days);
