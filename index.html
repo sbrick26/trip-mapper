@@ -817,6 +817,16 @@ function annotateStopsWithSheetRows() {
   });
 }
 
+// Ensure every day has a `cities` array (backward compat for cached data without it)
+function normalizeCities() {
+  if (!tripData?.days) return;
+  tripData.days.forEach(day => {
+    if (!day.cities || !Array.isArray(day.cities) || day.cities.length === 0) {
+      day.cities = day.city ? [day.city] : ['transit'];
+    }
+  });
+}
+
 // ─── Main generation pipeline ─────────────────────────────────────
 async function generate(force = false) {
   try {
@@ -844,6 +854,7 @@ async function generate(force = false) {
           ls3el.textContent = '⚡ Geocoding skipped (cached)';
           step('ls3','done');
           tripData = cacheJson.data;
+          normalizeCities();
           annotateStopsWithSheetRows();
           step('ls4','active'); setMsg('Building map...');
           await delay(300);
@@ -873,6 +884,7 @@ async function generate(force = false) {
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
     tripData = geocoded;
+    normalizeCities();
     annotateStopsWithSheetRows();
 
     // Store result in KV cache (non-blocking)
@@ -1047,6 +1059,7 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
       "date": "Wed, Mar 25",
       "title": "Short descriptive title for the day",
       "city": "transit",
+      "cities": ["transit"],
       "transport": null,
       "stops": [
         {
@@ -1062,7 +1075,14 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
 }
 
 RULES:
-- "city": must be one of: seoul, tokyo, fuji, kyoto, osaka, nara, transit (lowercase)
+- "city": the PRIMARY city for the day. Must be one of: seoul, tokyo, fuji, kyoto, osaka, nara, transit (lowercase).
+  IMPORTANT: Only use "transit" for days spent ENTIRELY in transit with no stops in any city (e.g. a full day on a plane).
+  If a day has transit BUT also has stops in a city, use that city as the primary. For example, a day taking a shinkansen
+  FROM Fuji TO Kyoto with stops in both should use one of those cities (prefer the destination).
+- "cities": an array of ALL cities touched on this day (lowercase). This is used for filtering.
+  Examples: a day in Tokyo → ["tokyo"]. A travel day from Fuji to Kyoto with stops in both → ["fuji","kyoto"].
+  A pure flight day with no city stops → ["transit"]. A day exploring Tokyo and Nara → ["tokyo","nara"].
+  NEVER leave a city out — every city where the day has stops must be listed.
 - "transport": null OR {"icon":"🚄","route":"A → B","detail":"departure time, duration, cost if known"}
   Use this for inter-city travel days (flights, shinkansen, buses between cities)
 - "geoQuery": a specific search string for geocoding. Include the landmark/place name + neighborhood + city + country.
@@ -1214,7 +1234,7 @@ function buildApp(data) {
     btn.onclick = () => {
       document.querySelectorAll('.cf').forEach(b=>b.classList.remove('on'));
       btn.classList.add('on');
-      const days = c==='all' ? data.days : data.days.filter(d=>d.city===c);
+      const days = c==='all' ? data.days : data.days.filter(d => (d.cities || [d.city]).includes(c));
       buildSidebar(days, data.days);
       renderMarkers(days);
     };
@@ -1231,12 +1251,14 @@ function revealApp() {
   document.getElementById('google-connect').style.display = 'none';
   document.getElementById('topbar').style.display = 'flex';
   document.getElementById('app').classList.add('show');
-  requestAnimationFrame(() => {
+  // Double rAF + timeout ensures container is fully laid out before fitting bounds
+  requestAnimationFrame(() => { requestAnimationFrame(() => {
     if (leafletMap) {
       leafletMap.invalidateSize();
+      // Re-render all markers so fitBounds runs with a properly sized container
       if (tripData && tripData.days) renderMarkers(tripData.days);
     }
-  });
+  }); });
   loadMapsAPI();
 }
 
@@ -2187,7 +2209,7 @@ function initMap(days) {
       center:[35.5,137],
       zoom:5,
       minZoom:3,
-      maxBounds:[[-85,-Infinity],[85,Infinity]],
+      maxBounds:[[-85,-180],[85,180]],
       maxBoundsViscosity:1.0
     });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
