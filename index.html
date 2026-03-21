@@ -217,6 +217,8 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .act:hover { border-color:var(--accent); color:var(--accent); }
 .act.dir { border-color:#5bbfe830; color:#5bbfe8; background:#5bbfe808; }
 .act.dir:hover { border-color:#5bbfe8; }
+.act.del { border-color:#e85b5b30; color:#e85b5b; background:#e85b5b08; }
+.act.del:hover { border-color:#e85b5b; }
 .act.walk { border-color:#56e39f30; color:#56e39f; background:#56e39f08; }
 .act.walk:hover { border-color:#56e39f; }
 
@@ -409,6 +411,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   backdrop-filter:blur(16px);
 }
 #add-panel.open { transform:translateY(0); }
+@media (min-width:769px) { #add-panel { right:auto; width:380px; } }
 
 .ap-header {
   display:flex; align-items:center; gap:10px;
@@ -431,12 +434,6 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   letter-spacing:.8px; margin-bottom:8px;
 }
 
-#ap-search {
-  width:100%; background:var(--bg); border:1px solid var(--border);
-  border-radius:9px; padding:9px 12px; color:var(--text);
-  font-size:13px; font-family:inherit; outline:none; transition:border-color .15s;
-}
-#ap-search:focus { border-color:var(--accent); }
 #ap-search::placeholder { color:#302c28; }
 
 #ap-results { margin-top:8px; display:flex; flex-direction:column; gap:4px; }
@@ -509,6 +506,23 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 }
 .ap-submit:hover { opacity:.88; }
 .ap-submit:disabled { opacity:.4; cursor:not-allowed; }
+
+/* Search mode toggle */
+.ap-mode-row { display:flex; gap:6px; margin-bottom:8px; }
+.ap-mode {
+  flex:1; padding:6px 10px; background:transparent; border:1px solid var(--border);
+  border-radius:7px; color:var(--muted); font-size:11px; cursor:pointer; font-family:inherit;
+  transition:all .12s;
+}
+.ap-mode.on { border-color:var(--accent); color:var(--accent); background:rgba(200,168,122,.08); }
+#ap-search, #ap-custom-name {
+  width:100%; background:var(--bg); border:1px solid var(--border);
+  border-radius:9px; padding:9px 12px; color:var(--text);
+  font-size:13px; font-family:inherit; outline:none; transition:border-color .15s;
+  box-sizing:border-box;
+}
+#ap-search:focus, #ap-custom-name:focus { border-color:var(--accent); }
+#ap-custom-name::placeholder { color:#302c28; }
 </style>
 </head>
 <body>
@@ -571,7 +585,14 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
   <div class="ap-section">
     <div class="ap-section-label">Search for a place</div>
+    <div class="ap-mode-row">
+      <button class="ap-mode on" id="ap-mode-name" onclick="setSearchMode('name')">🔍 Place name</button>
+      <button class="ap-mode" id="ap-mode-addr" onclick="setSearchMode('address')">📍 By address</button>
+    </div>
     <input type="text" id="ap-search" placeholder="e.g. Fushimi Inari Shrine…" autocomplete="off" oninput="onAddSearch()"/>
+    <div id="ap-name-row" style="display:none; margin-top:8px;">
+      <input type="text" id="ap-custom-name" placeholder="Name this place…" autocomplete="off"/>
+    </div>
     <div id="ap-results"></div>
     <div id="ap-selected" style="display:none"></div>
     <button class="ap-map-btn" id="ap-map-btn" onclick="toggleMapPinMode()">📍 Pick on map</button>
@@ -612,6 +633,8 @@ const WORKER_URL  = 'https://trip-mapper.swayambarik.workers.dev'; // ← paste 
 // Google OAuth Client ID — create one at console.cloud.google.com → APIs & Services → Credentials
 // Enable "Google Sheets API", create an OAuth 2.0 Web Client ID, add your domain to Authorized JS origins
 const GOOGLE_CLIENT_ID = '950178692511-8b3kg03lbjcqethq4d2tq0ii147mls3f.apps.googleusercontent.com'; // ← paste your OAuth Client ID here (e.g. "123456-abc.apps.googleusercontent.com")
+// Google Maps API Key — enable "Places API" + "Geocoding API" in Cloud Console → APIs & Services
+const GOOGLE_MAPS_API_KEY = ''; // ← paste your Maps API key here
 // ═══════════════════════════════════════════════════════════════════
 
 const CITY_COLORS = {
@@ -642,6 +665,7 @@ let addPanelPlaceName = null;
 let addPanelSelectedEmoji = '📍';
 let addPanelSearchTimeout = null;
 let addPanelMapMode = false;
+let addSearchMode = 'name'; // 'name' | 'address'
 
 // ─── Setup ────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
@@ -821,6 +845,7 @@ async function generate(force = false) {
     document.getElementById('app').classList.add('show');
     // Leaflet must recalculate size after container becomes visible
     requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
+    loadMapsAPI();
 
   } catch(err) {
     document.getElementById('loading').style.display = 'none';
@@ -832,6 +857,17 @@ async function generate(force = false) {
 }
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── Google Maps JS API (Places + Geocoding) ──────────────────────
+window.__mapsReady = () => {};
+function loadMapsAPI() {
+  if (!GOOGLE_MAPS_API_KEY || window.__mapsLoaded) return;
+  window.__mapsLoaded = true;
+  const s = document.createElement('script');
+  s.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&callback=__mapsReady`;
+  s.async = true;
+  document.head.appendChild(s);
+}
 
 // ─── Fetch sheet (server-side via Cloudflare Worker sheet proxy) ──
 async function fetchSheetTab(tab) {
@@ -1235,7 +1271,9 @@ function openAddPanel(dayId) {
   });
 
   // Reset fields
+  setSearchMode('name');
   document.getElementById('ap-search').value = '';
+  document.getElementById('ap-custom-name').value = '';
   document.getElementById('ap-results').innerHTML = '';
   document.getElementById('ap-selected').style.display = 'none';
   document.getElementById('ap-notes').value = '';
@@ -1270,6 +1308,18 @@ function toggleMapPinMode() {
   }
 }
 
+function setSearchMode(mode) {
+  addSearchMode = mode;
+  document.getElementById('ap-mode-name').classList.toggle('on', mode === 'name');
+  document.getElementById('ap-mode-addr').classList.toggle('on', mode === 'address');
+  document.getElementById('ap-name-row').style.display = mode === 'address' ? 'block' : 'none';
+  document.getElementById('ap-search').placeholder =
+    mode === 'name' ? 'e.g. Fushimi Inari Shrine…' : 'e.g. 68 Fukakusa Yabunouchicho, Fushimiku…';
+  document.getElementById('ap-results').innerHTML = '';
+  document.getElementById('ap-selected').style.display = 'none';
+  addPanelLat = null; addPanelLng = null; addPanelGeoQuery = null; addPanelPlaceName = null;
+}
+
 let addPanelSearchTimer = null;
 function onAddSearch() {
   clearTimeout(addPanelSearchTimer);
@@ -1284,6 +1334,66 @@ function onAddSearch() {
 async function searchPlaces(query) {
   const resultsDiv = document.getElementById('ap-results');
   resultsDiv.innerHTML = '<div class="ap-searching">Searching…</div>';
+
+  // ── Google Maps API path (if key is set and API is loaded) ──────
+  if (GOOGLE_MAPS_API_KEY && window.google?.maps?.places) {
+    if (addSearchMode === 'address') {
+      // Geocoding by address
+      const geocoder = new google.maps.Geocoder();
+      geocoder.geocode({ address: query }, (results, status) => {
+        if (status !== 'OK' || !results?.length) {
+          resultsDiv.innerHTML = '<div class="ap-no-results">No results — try a more specific address</div>';
+          return;
+        }
+        resultsDiv.innerHTML = '';
+        results.slice(0, 5).forEach(r => {
+          const btn = document.createElement('button');
+          btn.className = 'ap-result';
+          btn.textContent = r.formatted_address;
+          btn.onclick = () => {
+            const loc = r.geometry.location;
+            selectPlace({
+              lat: loc.lat(), lon: loc.lng(),
+              display_name: r.formatted_address, name: ''
+            }, r.formatted_address);
+          };
+          resultsDiv.appendChild(btn);
+        });
+      });
+      return;
+    } else {
+      // Place name autocomplete
+      const svc = new google.maps.places.AutocompleteService();
+      svc.getPlacePredictions({ input: query }, (predictions, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions?.length) {
+          resultsDiv.innerHTML = '<div class="ap-no-results">No results — try a different name</div>';
+          return;
+        }
+        resultsDiv.innerHTML = '';
+        predictions.slice(0, 5).forEach(p => {
+          const btn = document.createElement('button');
+          btn.className = 'ap-result';
+          btn.textContent = p.description;
+          btn.onclick = () => {
+            // Fetch place details to get lat/lng
+            const placeSvc = new google.maps.places.PlacesService(leafletMap.getContainer());
+            placeSvc.getDetails({ placeId: p.place_id, fields: ['geometry','name','formatted_address'] }, (place, st) => {
+              if (st !== google.maps.places.PlacesServiceStatus.OK || !place) return;
+              const loc = place.geometry.location;
+              selectPlace({
+                lat: loc.lat(), lon: loc.lng(),
+                display_name: p.description, name: place.name
+              }, p.description);
+            });
+          };
+          resultsDiv.appendChild(btn);
+        });
+      });
+      return;
+    }
+  }
+
+  // ── Nominatim fallback (no Maps API key or API not yet loaded) ──
   try {
     const res = await fetch(`${WORKER_URL}?geocode=${encodeURIComponent(query)}`);
     const results = await res.json();
@@ -1313,11 +1423,19 @@ function selectPlace(result, displayName) {
   addPanelGeoQuery = result.display_name || displayName;
   addPanelPlaceName = result.name || displayName.split(',')[0].trim();
 
-  document.getElementById('ap-search').value = addPanelPlaceName;
+  document.getElementById('ap-search').value = addSearchMode === 'address' ? displayName : addPanelPlaceName;
   document.getElementById('ap-results').innerHTML = '';
   const sel = document.getElementById('ap-selected');
   sel.style.display = 'block';
   sel.textContent = `📍 ${displayName}`;
+
+  if (addSearchMode === 'address') {
+    const nameRow = document.getElementById('ap-name-row');
+    nameRow.style.display = 'block';
+    const nameInput = document.getElementById('ap-custom-name');
+    if (!nameInput.value) nameInput.value = addPanelPlaceName;
+    setTimeout(() => nameInput.focus(), 100);
+  }
 }
 
 // ─── Submit: add stop in-memory + write to sheet ──────────────────
@@ -1325,7 +1443,10 @@ async function submitAddStop() {
   const day = tripData?.days.find(d => d.id === addPanelDayId);
   if (!day) return;
 
-  const name = document.getElementById('ap-search').value.trim();
+  const rawName = addSearchMode === 'address'
+    ? (document.getElementById('ap-custom-name').value.trim() || document.getElementById('ap-search').value.trim())
+    : document.getElementById('ap-search').value.trim();
+  const name = rawName;
   if (!name) { alert('Please search for and select a place first.'); return; }
 
   const slotVal  = parseInt(document.getElementById('ap-slot').value); // insertAfterIdx (-1 = before first)
@@ -1431,6 +1552,7 @@ function buildStopHTML(day, stop, i) {
       }
     }
   }
+  actsHtml += `<button class="act del" onclick="deleteStop(${day.id},${i})">🗑 Delete</button>`;
 
   const hasCoords = !!(stop.lat && stop.lng);
   return `<div class="tl-stop${hasCoords?' tl-stop-link':''}" id="stop-${day.id}-${i}"
@@ -1440,7 +1562,7 @@ function buildStopHTML(day, stop, i) {
     <div class="stop-time">${stop.time||''}</div>
     <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
     <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
-    ${actsHtml ? `<div class="stop-acts">${actsHtml}</div>` : ''}
+    <div class="stop-acts">${actsHtml}</div>
   </div>`;
 }
 
@@ -1517,6 +1639,53 @@ function shiftRowMap(dayId, newStopArrayIdx, newRowNumber) {
   if (rowMap[dayId]) {
     rowMap[dayId].stops.splice(newStopArrayIdx, 0, newRowNumber);
   }
+}
+
+// ─── Delete stop ──────────────────────────────────────────────────
+async function deleteStop(dayId, stopIdx) {
+  const day = tripData?.days.find(d => d.id === dayId);
+  if (!day) return;
+  const stopName = day.stops[stopIdx]?.name || 'this stop';
+  if (!confirm(`Remove "${stopName}" from the itinerary?`)) return;
+  day.stops.splice(stopIdx, 1);
+  rebuildDaySidebar(dayId);
+  renderMarkers(tripData.days);
+  try {
+    await deleteStopFromSheet(dayId, stopIdx);
+    await invalidateCache();
+  } catch(e) {
+    console.warn('[delete] Sheet remove failed (non-fatal):', e.message);
+  }
+}
+
+async function deleteStopFromSheet(dayId, stopIdx) {
+  if (!gToken) return;
+  const rm = rowMap[dayId];
+  if (!rm || rm.stops[stopIdx] === undefined) return;
+  const sheetRow = rm.stops[stopIdx]; // 1-indexed
+  const sheetId = itinerarySheetId !== null ? itinerarySheetId : 0;
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${gToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{ deleteDimension: {
+        range: { sheetId, dimension: 'ROWS', startIndex: sheetRow - 1, endIndex: sheetRow }
+      }}]})
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `deleteDimension failed (${res.status})`);
+  }
+  // Update rowMap: remove the entry and shift all row numbers > deleted row down by 1
+  Object.keys(rowMap).forEach(dId => {
+    const dm = rowMap[dId];
+    if (dm.headerRow > sheetRow) dm.headerRow--;
+    dm.stops = dm.stops.map(r => r > sheetRow ? r - 1 : r);
+  });
+  rowMap[dayId].stops.splice(stopIdx, 1);
+  console.log('[sheets] ✓ Stop deleted from sheet row', sheetRow);
 }
 
 async function invalidateCache() {
