@@ -1000,8 +1000,11 @@ function buildSidebar(days, allDays) {
               const sheetBody = sb.querySelector('.sheet-body');
               if (sheetBody) scrollToEl(el, sheetBody);
             } else {
-              // Sheet closed: just fly map to this day's markers
+              // Sheet closed: fly map and highlight the tab
               renderDayMarkers(d);
+              strip.querySelectorAll('.s-tab').forEach(t => { t.classList.remove('on'); t.style.color=''; t.style.borderColor=''; });
+              tab.classList.add('on'); tab.style.borderColor = c; tab.style.color = c;
+              document.getElementById('s-label').textContent = `Day ${day.id} · ${day.title}`;
             }
           }
         }
