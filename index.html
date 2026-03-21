@@ -1718,9 +1718,6 @@ async function deleteStopFromSheet(dayId, stopIdx, stop) {
       const freshDayEntry = freshRowMap[dayId];
 
       if (freshDayEntry && freshDayEntry.stops.length > 0) {
-        // Determine the row range owned by this day:
-        // from the first stop row down to just before the next day's header (or end of sheet)
-        const dayStopRows = new Set(freshDayEntry.stops);
         const lines = freshCsv.split('\n');
         const targetName = stop?.name;
         const targetTime = stop?.time || '';
