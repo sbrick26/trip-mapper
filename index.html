@@ -572,11 +572,11 @@ The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Add
 - The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
 
 === ITINERARY CSV ===
-${(csv['Itinerary']||'').slice(0,7000)}
+${csv['Itinerary']||''}
 
-${(csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'').slice(0,2000) : ''}
-${(csv['Hotels']||'').length > 30 ? '=== HOTELS ===\n' + (csv['Hotels']||'').slice(0,2000) : ''}
-${(csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'').slice(0,1500) : ''}
+${(csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'') : ''}
+${(csv['Hotels']||'').length > 30 ? '=== HOTELS ===\n' + (csv['Hotels']||'') : ''}
+${(csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'') : ''}
 
 CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
 
@@ -616,7 +616,7 @@ RULES:
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
 - Number days sequentially starting at 1.`;
 
-  const text = await claudeCall([{ role:'user', content:prompt }], 8000);
+  const text = await claudeCall([{ role:'user', content:prompt }], 16000);
   console.log('[claudeParse] Raw response length:', text.length);
   console.log('[claudeParse] First 200 chars:', text.slice(0, 200));
   try {
@@ -710,18 +710,21 @@ Return one entry per location. Include ALL ${uniqueQueries.length} locations.`;
 }
 
 // ─── Google Maps URL helpers ──────────────────────────────────────
-const gMapsPlace = (lat,lng) =>
-  `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+// Use place name (geoQuery) for Maps links so Google resolves the actual place
+const gMapsPlace = (stop) =>
+  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.geoQuery || stop.name)}`;
 
-const gMapsDir = (oLat,oLng,dLat,dLng,mode='transit') =>
-  `https://www.google.com/maps/dir/?api=1&origin=${oLat},${oLng}&destination=${dLat},${dLng}&travelmode=${mode}`;
+const gMapsDir = (fromStop, toStop, mode='transit') =>
+  `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(fromStop.geoQuery||fromStop.name)}&destination=${encodeURIComponent(toStop.geoQuery||toStop.name)}&travelmode=${mode}`;
 
 function gMapsDayRoute(stops) {
   const v = stops.filter(s=>s.lat&&s.lng);
   if (v.length < 2) return null;
-  const wps = v.slice(1,-1).map(s=>`${s.lat},${s.lng}`).join('|');
-  let u = `https://www.google.com/maps/dir/?api=1&origin=${v[0].lat},${v[0].lng}&destination=${v.at(-1).lat},${v.at(-1).lng}&travelmode=transit`;
-  if (wps) u += `&waypoints=${encodeURIComponent(wps)}`;
+  const origin = encodeURIComponent(v[0].geoQuery||v[0].name);
+  const dest = encodeURIComponent(v.at(-1).geoQuery||v.at(-1).name);
+  const wps = v.slice(1,-1).map(s=>encodeURIComponent(s.geoQuery||s.name)).join('|');
+  let u = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${dest}&travelmode=transit`;
+  if (wps) u += `&waypoints=${wps}`;
   return u;
 }
 
@@ -787,7 +790,7 @@ function buildSidebar(days, allDays) {
           const isWalk   = d < 1.5;
           const mode     = isWalk ? 'walking' : 'transit';
           const timeStr  = isWalk ? walkLabel(d) : transitLabel(d);
-          const dirUrl   = gMapsDir(prev.lat,prev.lng,stop.lat,stop.lng,mode);
+          const dirUrl   = gMapsDir(prev,stop,mode);
           connHtml = `<div class="conn">
             ${isWalk?'🚶':'🚃'} ${d<1?Math.round(d*1000)+'m':d.toFixed(1)+'km'} · ${timeStr}
             <a href="${dirUrl}" target="_blank">${isWalk?'Walk directions':'Transit directions'} →</a>
@@ -798,14 +801,14 @@ function buildSidebar(days, allDays) {
       // Action buttons
       let actsHtml = '';
       if (stop.lat && stop.lng) {
-        const mUrl = gMapsPlace(stop.lat, stop.lng);
+        const mUrl = gMapsPlace(stop);
         actsHtml += `<a class="act" href="${mUrl}" target="_blank">📍 Open in Maps</a>`;
         if (prev?.lat && prev?.lng) {
           const d = km(prev.lat,prev.lng,stop.lat,stop.lng);
           if (d < 80) {
             const isWalk = d < 1.5;
             const mode = isWalk ? 'walking' : 'transit';
-            const dUrl = gMapsDir(prev.lat,prev.lng,stop.lat,stop.lng,mode);
+            const dUrl = gMapsDir(prev,stop,mode);
             actsHtml += `<a class="act ${isWalk?'walk':'dir'}" href="${dUrl}" target="_blank">
               ${isWalk?'🚶 Walk':'🚃 Transit'} from prev
             </a>`;
@@ -895,7 +898,7 @@ function mkIcon(color, emoji) {
 }
 
 function popupContent(stop, day, prevStop) {
-  const mUrl = gMapsPlace(stop.lat, stop.lng);
+  const mUrl = gMapsPlace(stop);
   let dirBtn = '';
   if (prevStop?.lat && prevStop?.lng) {
     const d = km(prevStop.lat,prevStop.lng,stop.lat,stop.lng);
@@ -903,7 +906,7 @@ function popupContent(stop, day, prevStop) {
       const isWalk = d < 1.5;
       const mode = isWalk ? 'walking' : 'transit';
       const label = isWalk ? `🚶 ${walkLabel(d)} from prev` : `🚃 ${transitLabel(d)} from prev`;
-      const dUrl = gMapsDir(prevStop.lat,prevStop.lng,stop.lat,stop.lng,mode);
+      const dUrl = gMapsDir(prevStop,stop,mode);
       dirBtn = `<a class="pu-btn dir" href="${dUrl}" target="_blank">${label}</a>`;
     }
   }
