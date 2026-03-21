@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Japan 2026 🌸</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet"/>
+<style>
+/* ─────────────────── VARIABLES ─────────────────── */
+:root {
+  --bg: #0d0c0b;
+  --s1: #131110;
+  --s2: #191613;
+  --s3: #201d19;
+  --border: #272320;
+  --text: #ede9e0;
+  --muted: #6b6258;
+  --accent: #c8a87a;
+  --gold: #e8c55b;
+}
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; overflow:hidden; }
+body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; }
+
+/* ─────────────────── SETUP MODAL ─────────────────── */
+#setup {
+  position:fixed; inset:0; z-index:9999;
+  background:rgba(10,9,8,.95); backdrop-filter:blur(12px);
+  display:flex; align-items:center; justify-content:center;
+}
+.setup-box {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:20px; padding:36px 40px; width:440px; max-width:94vw;
+  box-shadow: 0 32px 80px rgba(0,0,0,.6);
+}
+.setup-box h1 {
+  font-family:'DM Serif Display',serif; font-size:26px; font-weight:400;
+  letter-spacing:-.3px; margin-bottom:6px;
+}
+.setup-box h1 em { color:var(--accent); font-style:italic; }
+.setup-box .sub { font-size:12px; color:var(--muted); margin-bottom:28px; line-height:1.7; }
+
+.setup-box label {
+  display:block; font-size:10px; font-weight:600; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px;
+}
+.setup-box input {
+  width:100%; background:var(--bg); border:1px solid var(--border);
+  border-radius:9px; padding:10px 13px; color:var(--text);
+  font-size:13px; font-family:inherit; outline:none;
+  transition:border-color .15s; margin-bottom:16px;
+}
+.setup-box input:focus { border-color:var(--accent); }
+.setup-box input::placeholder { color:#302c28; }
+
+.setup-hint {
+  font-size:11px; color:var(--muted); margin-top:-10px; margin-bottom:16px;
+  line-height:1.5;
+}
+.setup-hint a { color:var(--accent); text-decoration:none; }
+.setup-hint a:hover { text-decoration:underline; }
+
+.go-btn {
+  width:100%; padding:12px; background:var(--accent); color:#0d0c0b;
+  border:none; border-radius:10px; font-size:14px; font-weight:700;
+  cursor:pointer; font-family:inherit; letter-spacing:.2px;
+  transition:opacity .15s; display:flex; align-items:center; justify-content:center; gap:7px;
+}
+.go-btn:hover { opacity:.88; }
+.go-btn:disabled { opacity:.4; cursor:not-allowed; }
+
+#setup-err {
+  margin-top:10px; font-size:12px; color:#e87c5b;
+  display:none; line-height:1.5;
+}
+
+/* ─────────────────── LOADING ─────────────────── */
+#loading {
+  position:fixed; inset:0; z-index:9998;
+  background:rgba(10,9,8,.95); backdrop-filter:blur(12px);
+  display:none; flex-direction:column; align-items:center; justify-content:center; gap:20px;
+}
+.spin {
+  width:36px; height:36px; border:3px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%;
+  animation:spin .7s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+.load-steps { display:flex; flex-direction:column; gap:6px; }
+.ls {
+  display:flex; align-items:center; gap:8px; font-size:12px;
+  color:var(--muted); padding:5px 14px; border-radius:20px;
+  border:1px solid transparent; transition:all .25s;
+}
+.ls.active { color:var(--accent); border-color:var(--accent)44; background:var(--accent)08; }
+.ls.done { color:#56e39f; border-color:#56e39f33; }
+#load-msg { font-size:13px; color:var(--muted); max-width:280px; text-align:center; line-height:1.6; }
+
+/* ─────────────────── TOPBAR ─────────────────── */
+#topbar {
+  display:flex; align-items:center; gap:10px; padding:9px 16px;
+  background:var(--s1); border-bottom:1px solid var(--border);
+  flex-shrink:0; flex-wrap:wrap; min-height:50px;
+}
+#trip-name { font-family:'DM Serif Display',serif; font-size:17px; font-weight:400; flex-shrink:0; }
+#trip-name em { color:var(--accent); font-style:italic; }
+#trip-dates { font-size:11px; color:var(--muted); flex-shrink:0; padding:0 8px; border-left:1px solid var(--border); }
+.city-filters { display:flex; gap:4px; flex-wrap:wrap; flex:1; }
+.cf {
+  padding:3px 10px; border-radius:20px; font-size:10px; font-weight:700;
+  cursor:pointer; text-transform:uppercase; letter-spacing:.4px;
+  border:1px solid var(--border); background:transparent; color:var(--muted);
+  font-family:inherit; transition:all .15s;
+}
+.cf.on { border-color:var(--accent); color:var(--accent); background:var(--accent)12; }
+
+#refresh-btn {
+  padding:5px 11px; background:transparent; border:1px solid var(--border);
+  border-radius:8px; color:var(--muted); font-size:11px; cursor:pointer;
+  font-family:inherit; transition:all .15s; flex-shrink:0;
+  display:flex; align-items:center; gap:4px;
+}
+#refresh-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ─────────────────── LAYOUT ─────────────────── */
+#app { display:none; flex:1; min-height:0; }
+#app.show { display:flex; }
+
+/* ─────────────────── SIDEBAR ─────────────────── */
+#sidebar {
+  width:380px; min-width:380px; overflow-y:auto;
+  background:var(--s1); border-right:1px solid var(--border);
+}
+#sidebar::-webkit-scrollbar { width:3px; }
+#sidebar::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
+
+/* Day card */
+.day {
+  border-bottom:1px solid #1a1714; cursor:pointer;
+  transition:background .12s;
+}
+.day:hover, .day.open { background:var(--s2); }
+
+.day-hd {
+  display:flex; align-items:center; gap:10px; padding:10px 14px;
+}
+.day-num {
+  width:27px; height:27px; border-radius:50%; border:2px solid;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; flex-shrink:0;
+}
+.day-info { flex:1; min-width:0; }
+.day-date { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+.day-title { font-size:13px; font-weight:500; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.day-badge {
+  font-size:9px; padding:2px 7px; border-radius:9px;
+  font-weight:700; text-transform:uppercase; letter-spacing:.3px; flex-shrink:0;
+}
+.chev { color:var(--muted); font-size:9px; flex-shrink:0; transition:transform .2s; }
+.day.open .chev { transform:rotate(90deg); }
+
+.day-body { display:none; padding:0 12px 12px 51px; }
+.day.open .day-body { display:block; }
+
+/* Transport banner */
+.tx-banner {
+  display:flex; gap:8px; align-items:flex-start;
+  background:var(--bg); border-radius:8px; padding:8px 11px;
+  margin-bottom:8px; border-left:3px solid;
+}
+.tx-icon { font-size:15px; line-height:1.3; flex-shrink:0; }
+.tx-label { font-size:11px; font-weight:600; }
+.tx-detail { font-size:10px; color:var(--muted); margin-top:2px; line-height:1.4; }
+
+/* Timeline stops */
+.tl { position:relative; }
+.tl::before {
+  content:''; position:absolute; left:6px; top:8px; bottom:0;
+  width:1px; background:var(--border);
+}
+.tl-stop { position:relative; padding:5px 0 8px 22px; }
+.tl-dot {
+  position:absolute; left:0; top:8px;
+  width:13px; height:13px; border-radius:50%; border:2px solid var(--bg);
+  display:flex; align-items:center; justify-content:center;
+}
+
+/* Connection info between stops */
+.conn {
+  display:flex; align-items:center; gap:5px;
+  margin:-2px 0 4px 0; padding:3px 7px;
+  background:var(--bg); border-radius:5px; border:1px solid var(--border);
+  font-size:10px; color:var(--muted);
+}
+.conn a {
+  color:#5bbfe8; text-decoration:none; font-weight:600;
+  border-left:1px solid var(--border); padding-left:5px; margin-left:3px;
+}
+.conn a:hover { color:#a0dfff; }
+
+.stop-time { font-size:10px; color:var(--muted); margin-bottom:2px; letter-spacing:.2px; }
+.stop-name { font-size:12px; font-weight:500; line-height:1.3; }
+.stop-note { font-size:11px; color:var(--muted); margin-top:2px; line-height:1.4; }
+
+/* Stop action buttons */
+.stop-acts { display:flex; gap:4px; flex-wrap:wrap; margin-top:5px; }
+.act {
+  display:inline-flex; align-items:center; gap:3px;
+  font-size:10px; padding:3px 8px; border-radius:5px;
+  text-decoration:none; border:1px solid var(--border);
+  background:var(--s3); color:#a09080; transition:all .12s;
+  font-family:inherit; cursor:pointer; white-space:nowrap;
+}
+.act:hover { border-color:var(--accent); color:var(--accent); }
+.act.dir { border-color:#5bbfe830; color:#5bbfe8; background:#5bbfe808; }
+.act.dir:hover { border-color:#5bbfe8; }
+.act.walk { border-color:#56e39f30; color:#56e39f; background:#56e39f08; }
+.act.walk:hover { border-color:#56e39f; }
+
+/* Full day route button */
+.day-route-btn {
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  width:100%; margin-top:10px; padding:7px;
+  background:var(--s3); border:1px solid #5bbfe830;
+  border-radius:8px; color:#5bbfe8; font-size:11px; font-weight:600;
+  text-decoration:none; transition:all .15s;
+}
+.day-route-btn:hover { background:#5bbfe810; border-color:#5bbfe8; }
+
+/* ─────────────────── MAP ─────────────────── */
+#map-wrap { flex:1; position:relative; }
+#map { width:100%; height:100%; }
+
+/* Leaflet dark popup */
+.leaflet-popup-content-wrapper {
+  background:#1c1915 !important;
+  border:1px solid #2a2520 !important;
+  border-radius:12px !important;
+  box-shadow:0 10px 32px rgba(0,0,0,.7) !important;
+}
+.leaflet-popup-content {
+  color:#ede9e0 !important; font-family:'DM Sans',sans-serif !important;
+  margin:13px 15px !important; min-width:190px; max-width:260px;
+}
+.leaflet-popup-tip { background:#1c1915 !important; }
+.leaflet-popup-close-button { color:#6b6258 !important; font-size:17px !important; }
+
+.pu-title { font-size:13px; font-weight:600; margin-bottom:3px; }
+.pu-time { font-size:11px; color:#6b6258; }
+.pu-note { font-size:11px; color:#9a9080; margin-top:5px; line-height:1.5; }
+.pu-acts { margin-top:9px; display:flex; gap:5px; flex-wrap:wrap; }
+.pu-btn {
+  display:inline-flex; align-items:center; gap:3px;
+  font-size:10px; padding:4px 9px; border-radius:6px;
+  text-decoration:none; border:1px solid #2a2520;
+  background:#141210; color:#a09080; transition:all .12s;
+}
+.pu-btn:hover { border-color:var(--accent); color:var(--accent); }
+.pu-btn.dir { border-color:#5bbfe830; color:#5bbfe8; background:#5bbfe80a; }
+.pu-btn.dir:hover { border-color:#5bbfe8; }
+
+/* Map day-card overlay */
+#day-card {
+  position:absolute; top:12px; right:12px; z-index:1000;
+  background:rgba(13,12,11,.94); border:1px solid var(--border);
+  border-radius:11px; padding:12px 14px; max-width:220px;
+  backdrop-filter:blur(10px); display:none;
+  border-left:3px solid var(--accent);
+}
+.dc-date { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+.dc-title { font-size:13px; font-weight:600; margin-top:2px; }
+.dc-meta { font-size:11px; color:var(--muted); margin-top:3px; }
+.dc-route {
+  display:flex; align-items:center; gap:5px; margin-top:8px;
+  font-size:10px; font-weight:600; color:#5bbfe8;
+  text-decoration:none; padding:4px 8px;
+  background:#5bbfe80a; border:1px solid #5bbfe830;
+  border-radius:6px;
+}
+.dc-route:hover { border-color:#5bbfe8; }
+
+/* Marker bubble */
+.mk {
+  width:30px; height:30px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:13px; border:2.5px solid rgba(255,255,255,.8);
+  box-shadow:0 2px 12px rgba(0,0,0,.55); cursor:pointer;
+  transition:transform .12s;
+}
+.mk:hover { transform:scale(1.15); }
+</style>
+</head>
+<body>
+
+<!-- ═══ SETUP MODAL ═══════════════════════════════════════════════ -->
+<div id="setup">
+  <div class="setup-box">
+    <h1>🌸 Japan <em>2026</em></h1>
+    <p class="sub">Enter your Anthropic API key to generate the map from your Google Sheet. The key is used this session only — never stored anywhere.</p>
+
+    <label>Anthropic API Key</label>
+    <input type="password" id="api-key" placeholder="sk-ant-api03-..." autocomplete="off"/>
+    <p class="setup-hint">
+      Get yours at <a href="https://console.anthropic.com/keys" target="_blank">console.anthropic.com/keys</a>
+      · ~$0.05 per generation · Cleared when you close this tab
+    </p>
+
+    <button class="go-btn" id="go-btn" onclick="startLoad()">
+      <span>✨</span> Generate Map from Sheet
+    </button>
+    <div id="setup-err"></div>
+  </div>
+</div>
+
+<!-- ═══ LOADING ══════════════════════════════════════════════════ -->
+<div id="loading">
+  <div class="spin"></div>
+  <div id="load-msg">Starting up...</div>
+  <div class="load-steps">
+    <div class="ls" id="ls1">📄 Fetching Google Sheet</div>
+    <div class="ls" id="ls2">🤖 Claude parsing itinerary</div>
+    <div class="ls" id="ls3">📍 Geocoding all locations</div>
+    <div class="ls" id="ls4">🗺️ Building interactive map</div>
+  </div>
+</div>
+
+<!-- ═══ TOPBAR + APP ═════════════════════════════════════════════ -->
+<div id="topbar" style="display:none">
+  <div id="trip-name">🌸 <em>Travel Map</em></div>
+  <div id="trip-dates"></div>
+  <div class="city-filters" id="filters"></div>
+  <button id="refresh-btn" onclick="doRefresh()">↺ Refresh</button>
+</div>
+
+<div id="app">
+  <div id="sidebar"></div>
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="day-card"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  CONFIG — edit these two lines before pushing to GitHub
+// ═══════════════════════════════════════════════════════════════════
+const SHEET_ID    = '12ugZ8N3sgjBNjszldQ9cUSHb_EE3jP_F11hrWOId6RA';
+const WORKER_URL  = 'https://YOUR-WORKER.YOUR-NAME.workers.dev'; // ← paste your Cloudflare Worker URL
+// ═══════════════════════════════════════════════════════════════════
+
+const CITY_COLORS = {
+  seoul:'#e87c5b', tokyo:'#e8c55b', fuji:'#5bbfe8',
+  kyoto:'#b05be8', osaka:'#5be8a0', nara:'#e85bb0', transit:'#888'
+};
+
+// ─── State ────────────────────────────────────────────────────────
+let apiKey = '';
+let tripData = null;
+let leafletMap = null;
+let layerGroup = null;
+let activeDay = null;
+
+// ─── Setup ────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  // Check sessionStorage for key (survives page refresh but not tab close)
+  const cached = sessionStorage.getItem('_tmap_k');
+  if (cached) {
+    document.getElementById('api-key').value = cached;
+  }
+});
+
+function showErr(msg) {
+  const el = document.getElementById('setup-err');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+async function startLoad() {
+  const key = document.getElementById('api-key').value.trim();
+  if (!key || !key.startsWith('sk-ant')) {
+    return showErr('Please enter a valid Anthropic API key (starts with sk-ant-)');
+  }
+  if (WORKER_URL.includes('YOUR-WORKER')) {
+    return showErr('Update WORKER_URL in the HTML with your Cloudflare Worker URL first.');
+  }
+  apiKey = key;
+  sessionStorage.setItem('_tmap_k', key);
+  document.getElementById('setup').style.display = 'none';
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('go-btn').disabled = true;
+  await generate();
+}
+
+async function doRefresh() {
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('app').style.opacity = '.3';
+  // Reset step labels
+  [['ls1','📄 Fetching Google Sheet'],['ls2','🤖 Claude parsing itinerary'],
+   ['ls3','📍 Geocoding all locations'],['ls4','🗺️ Building interactive map']].forEach(([id,label]) => {
+    const el = document.getElementById(id);
+    el.className = 'ls'; el.textContent = label;
+  });
+  await generate();
+  document.getElementById('app').style.opacity = '1';
+}
+
+function step(id, state) {
+  const el = document.getElementById(id);
+  el.classList.toggle('active', state === 'active');
+  el.classList.toggle('done',   state === 'done');
+  if (state === 'done') el.textContent = '✓ ' + el.textContent.replace(/^[✓📄🤖📍🗺️✓]\s*/,'');
+}
+function setMsg(t) { document.getElementById('load-msg').textContent = t; }
+
+// ─── Main generation pipeline ─────────────────────────────────────
+async function generate() {
+  try {
+    step('ls1','active'); setMsg('Fetching your Google Sheet...');
+    const csv = await fetchSheet();
+    step('ls1','done');
+
+    step('ls2','active'); setMsg('Claude is reading your itinerary...');
+    const parsed = await claudeParse(csv);
+    step('ls2','done');
+
+    step('ls3','active'); setMsg('Geocoding all locations...');
+    const geocoded = await claudeGeocode(parsed);
+    step('ls3','done');
+    tripData = geocoded;
+
+    step('ls4','active'); setMsg('Building map...');
+    await delay(300);
+    buildApp(tripData);
+    step('ls4','done');
+    await delay(500);
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('topbar').style.display  = 'flex';
+    document.getElementById('app').classList.add('show');
+
+  } catch(err) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('setup').style.display = 'flex';
+    document.getElementById('go-btn').disabled = false;
+    showErr(err.message || String(err));
+    console.error(err);
+  }
+}
+
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── Fetch sheet (server-side via Cloudflare Worker sheet proxy) ──
+// Since the worker is ours, we add a /sheet path that fetches Google Sheets
+// Actually: Google Sheets export is accessible server-side. We'll fetch it
+// directly through the worker with a simple query param.
+async function fetchSheet() {
+  const tabs = ['Itinerary','Transportation','Hotels','Flights'];
+  const results = {};
+
+  for (const tab of tabs) {
+    const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(tab)}`;
+    // Use worker as pass-through for CORS
+    const res = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(sheetUrl), {
+      method: 'GET',
+      headers: { 'X-Api-Key': apiKey }
+    });
+    if (res.ok) {
+      const t = await res.text();
+      results[tab] = t.startsWith('<!') ? '' : t;
+    } else {
+      results[tab] = '';
+    }
+  }
+
+  if (!results['Itinerary'] || results['Itinerary'].length < 30) {
+    throw new Error(
+      'Could not read the Itinerary sheet.\n' +
+      'Make sure the sheet sharing is set to "Anyone with the link → Viewer".\n' +
+      'Also check your Cloudflare Worker is deployed and WORKER_URL is correct.'
+    );
+  }
+  return results;
+}
+
+// ─── Claude: parse CSV to structured itinerary ────────────────────
+async function claudeCall(messages, maxTokens = 6000) {
+  const res = await fetch(WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: maxTokens,
+      messages
+    })
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `Claude API error ${res.status}`);
+  }
+  const data = await res.json();
+  const text = data.content[0].text.trim();
+  return text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+}
+
+async function claudeParse(csv) {
+  const prompt = `Parse this travel itinerary from Google Sheets CSV data into JSON.
+
+=== ITINERARY ===
+${(csv['Itinerary']||'').slice(0,7000)}
+
+=== TRANSPORTATION ===
+${(csv['Transportation']||'').slice(0,2000)}
+
+=== HOTELS ===
+${(csv['Hotels']||'').slice(0,2000)}
+
+=== FLIGHTS ===
+${(csv['Flights']||'').slice(0,1500)}
+
+Return ONLY a raw JSON object (no markdown, no explanation, start with {):
+{
+  "tripName": "string",
+  "dateRange": "string",
+  "cities": ["city1", "city2"],
+  "days": [
+    {
+      "id": 1,
+      "date": "Wed, Mar 25",
+      "title": "Short title",
+      "city": "tokyo",
+      "transport": null,
+      "stops": [
+        {
+          "time": "2:00 PM",
+          "name": "Place Name",
+          "detail": "Address, notes, phone",
+          "emoji": "⛩️",
+          "geoQuery": "Senso-ji Temple Asakusa Tokyo Japan"
+        }
+      ]
+    }
+  ]
+}
+
+Rules:
+- city: lowercase slug (seoul/tokyo/fuji/kyoto/osaka/nara/transit)
+- transport: null OR { "icon":"🚄", "route":"A→B", "detail":"times, cost, duration" }
+- geoQuery: specific enough to geocode accurately, always include city+country
+- emoji: relevant (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🏖️)
+- detail: include address and phone if available, keep newlines as \\n`;
+
+  const text = await claudeCall([{ role:'user', content:prompt }], 8000);
+  return JSON.parse(text);
+}
+
+// ─── Claude: geocode all stops ────────────────────────────────────
+async function claudeGeocode(data) {
+  const queries = [];
+  data.days.forEach(day => {
+    day.stops.forEach(stop => {
+      if (stop.geoQuery && !queries.find(q=>q.q===stop.geoQuery)) {
+        queries.push({ q:stop.geoQuery, ref:stop });
+      }
+    });
+  });
+
+  const list = queries.map((q,i)=>`${i}: ${q.q}`).join('\n');
+
+  const prompt = `Return GPS coordinates for these locations as a JSON array.
+CRITICAL: Start your response with [ and end with ]. No explanation, no markdown.
+
+${list}
+
+Format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]`;
+
+  const text = await claudeCall([{ role:'user', content:prompt }], 3000);
+  const coords = JSON.parse(text);
+
+  coords.forEach(c => {
+    if (queries[c.i]) {
+      queries[c.i].ref.lat = c.lat;
+      queries[c.i].ref.lng = c.lng;
+    }
+  });
+
+  return data;
+}
+
+// ─── Google Maps URL helpers ──────────────────────────────────────
+const gMapsPlace = (lat,lng) =>
+  `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+
+const gMapsDir = (oLat,oLng,dLat,dLng,mode='transit') =>
+  `https://www.google.com/maps/dir/?api=1&origin=${oLat},${oLng}&destination=${dLat},${dLng}&travelmode=${mode}`;
+
+function gMapsDayRoute(stops) {
+  const v = stops.filter(s=>s.lat&&s.lng);
+  if (v.length < 2) return null;
+  const wps = v.slice(1,-1).map(s=>`${s.lat},${s.lng}`).join('|');
+  let u = `https://www.google.com/maps/dir/?api=1&origin=${v[0].lat},${v[0].lng}&destination=${v.at(-1).lat},${v.at(-1).lng}&travelmode=transit`;
+  if (wps) u += `&waypoints=${encodeURIComponent(wps)}`;
+  return u;
+}
+
+// Haversine km
+function km(a,b,c,d) {
+  const R=6371,dA=(c-a)*Math.PI/180,dB=(d-b)*Math.PI/180;
+  const x=Math.sin(dA/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dB/2)**2;
+  return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+function walkLabel(d)    { const m=Math.round(d/5*60); return m<60?`${m} min walk`:`${(m/60).toFixed(1)}h walk`; }
+function transitLabel(d) { const m=Math.round(d/30*60); return m<60?`${m} min transit`:`${Math.round(m/5)*5} min transit`; }
+
+// Color helper
+function col(city) { return CITY_COLORS[city?.toLowerCase()] || '#888'; }
+
+// ─── Build the full app ───────────────────────────────────────────
+function buildApp(data) {
+  // Trip name + dates
+  document.getElementById('trip-name').innerHTML = `🌸 <em>${data.tripName||'Trip'}</em>`;
+  document.getElementById('trip-dates').textContent = data.dateRange || '';
+
+  // City filters
+  const filterDiv = document.getElementById('filters');
+  filterDiv.innerHTML = '';
+  const cities = ['all',...(data.cities||[])];
+  cities.forEach(c => {
+    const btn = document.createElement('button');
+    btn.className = 'cf' + (c==='all'?' on':'');
+    btn.textContent = c==='all' ? 'All' : c[0].toUpperCase()+c.slice(1);
+    btn.onclick = () => {
+      document.querySelectorAll('.cf').forEach(b=>b.classList.remove('on'));
+      btn.classList.add('on');
+      const days = c==='all' ? data.days : data.days.filter(d=>d.city===c);
+      buildSidebar(days, data.days);
+      renderMarkers(days);
+    };
+    filterDiv.appendChild(btn);
+  });
+
+  buildSidebar(data.days, data.days);
+  initMap(data.days);
+}
+
+function buildSidebar(days, allDays) {
+  const sb = document.getElementById('sidebar');
+  sb.innerHTML = '';
+
+  days.forEach(day => {
+    const c = col(day.city);
+    const validStops = (day.stops||[]).filter(s=>s.lat&&s.lng);
+    const routeUrl = gMapsDayRoute(validStops);
+
+    // Build timeline HTML
+    let timelineHtml = '';
+    (day.stops||[]).forEach((stop,i) => {
+      const prev = i>0 ? day.stops[i-1] : null;
+
+      // Connection info from previous stop
+      let connHtml = '';
+      if (prev?.lat && prev?.lng && stop.lat && stop.lng) {
+        const d = km(prev.lat,prev.lng,stop.lat,stop.lng);
+        if (d < 80) {
+          const isWalk   = d < 1.5;
+          const mode     = isWalk ? 'walking' : 'transit';
+          const timeStr  = isWalk ? walkLabel(d) : transitLabel(d);
+          const dirUrl   = gMapsDir(prev.lat,prev.lng,stop.lat,stop.lng,mode);
+          connHtml = `<div class="conn">
+            ${isWalk?'🚶':'🚃'} ${d<1?Math.round(d*1000)+'m':d.toFixed(1)+'km'} · ${timeStr}
+            <a href="${dirUrl}" target="_blank">${isWalk?'Walk directions':'Transit directions'} →</a>
+          </div>`;
+        }
+      }
+
+      // Action buttons
+      let actsHtml = '';
+      if (stop.lat && stop.lng) {
+        const mUrl = gMapsPlace(stop.lat, stop.lng);
+        actsHtml += `<a class="act" href="${mUrl}" target="_blank">📍 Open in Maps</a>`;
+        if (prev?.lat && prev?.lng) {
+          const d = km(prev.lat,prev.lng,stop.lat,stop.lng);
+          if (d < 80) {
+            const isWalk = d < 1.5;
+            const mode = isWalk ? 'walking' : 'transit';
+            const dUrl = gMapsDir(prev.lat,prev.lng,stop.lat,stop.lng,mode);
+            actsHtml += `<a class="act ${isWalk?'walk':'dir'}" href="${dUrl}" target="_blank">
+              ${isWalk?'🚶 Walk':'🚃 Transit'} from prev
+            </a>`;
+          }
+        }
+      }
+
+      timelineHtml += `
+        <div class="tl-stop">
+          <div class="tl-dot" style="background:${c}"></div>
+          ${connHtml}
+          <div class="stop-time">${stop.time||''}</div>
+          <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
+          <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
+          ${actsHtml ? `<div class="stop-acts">${actsHtml}</div>` : ''}
+        </div>`;
+    });
+
+    const el = document.createElement('div');
+    el.className = 'day';
+    el.id = `day-${day.id}`;
+    el.innerHTML = `
+      <div class="day-hd">
+        <div class="day-num" style="border-color:${c};color:${c}">${day.id}</div>
+        <div class="day-info">
+          <div class="day-date">${day.date}</div>
+          <div class="day-title">${day.title}</div>
+        </div>
+        <div class="day-badge" style="background:${c}20;color:${c}">${day.city||''}</div>
+        <div class="chev">▶</div>
+      </div>
+      <div class="day-body">
+        ${day.transport ? `
+          <div class="tx-banner" style="border-color:${c}60">
+            <span class="tx-icon">${day.transport.icon}</span>
+            <div>
+              <div class="tx-label" style="color:${c}">${day.transport.route}</div>
+              <div class="tx-detail">${day.transport.detail}</div>
+            </div>
+          </div>` : ''}
+        <div class="tl">${timelineHtml}</div>
+        ${routeUrl ? `
+          <a class="day-route-btn" href="${routeUrl}" target="_blank">
+            🗺️ Open full day route in Google Maps
+          </a>` : ''}
+      </div>`;
+
+    el.querySelector('.day-hd').onclick = () => toggleDay(day, el);
+    sb.appendChild(el);
+  });
+}
+
+function toggleDay(day, el) {
+  const isOpen = el.classList.contains('open');
+  document.querySelectorAll('.day').forEach(d=>d.classList.remove('open'));
+  activeDay = null;
+  document.getElementById('day-card').style.display='none';
+
+  if (!isOpen) {
+    el.classList.add('open');
+    activeDay = day.id;
+    el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    renderDayMarkers(day);
+  } else {
+    renderMarkers(tripData.days);
+  }
+}
+
+// ─── Leaflet map ──────────────────────────────────────────────────
+function initMap(days) {
+  if (!leafletMap) {
+    leafletMap = L.map('map',{center:[35.5,137],zoom:5});
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+      attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19
+    }).addTo(leafletMap);
+    layerGroup = L.layerGroup().addTo(leafletMap);
+  }
+  renderMarkers(days);
+}
+
+function mkIcon(color, emoji) {
+  return L.divIcon({
+    className:'',
+    html:`<div class="mk" style="background:${color}">${emoji}</div>`,
+    iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-20]
+  });
+}
+
+function popupContent(stop, day, prevStop) {
+  const mUrl = gMapsPlace(stop.lat, stop.lng);
+  let dirBtn = '';
+  if (prevStop?.lat && prevStop?.lng) {
+    const d = km(prevStop.lat,prevStop.lng,stop.lat,stop.lng);
+    if (d < 80) {
+      const isWalk = d < 1.5;
+      const mode = isWalk ? 'walking' : 'transit';
+      const label = isWalk ? `🚶 ${walkLabel(d)} from prev` : `🚃 ${transitLabel(d)} from prev`;
+      const dUrl = gMapsDir(prevStop.lat,prevStop.lng,stop.lat,stop.lng,mode);
+      dirBtn = `<a class="pu-btn dir" href="${dUrl}" target="_blank">${label}</a>`;
+    }
+  }
+  return `
+    <div class="pu-title">${stop.emoji||''} ${stop.name}</div>
+    <div class="pu-time">${day.date} · ${stop.time||''}</div>
+    <div class="pu-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
+    <div class="pu-acts">
+      <a class="pu-btn" href="${mUrl}" target="_blank">📍 Open in Maps</a>
+      ${dirBtn}
+    </div>`;
+}
+
+function renderMarkers(days) {
+  layerGroup.clearLayers();
+  document.getElementById('day-card').style.display='none';
+  const bounds = [];
+
+  days.forEach(day => {
+    const c = col(day.city);
+    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&s.lat>0).forEach((stop,i)=>{
+      const prev = i>0 ? day.stops[i-1] : null;
+      const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
+      m.bindPopup(popupContent(stop,day,prev));
+      m.addTo(layerGroup);
+      bounds.push([stop.lat,stop.lng]);
+    });
+  });
+
+  if (bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds),{padding:[50,50],maxZoom:12});
+}
+
+function renderDayMarkers(day) {
+  layerGroup.clearLayers();
+  const c = col(day.city);
+  const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
+
+  pts.forEach((stop,i) => {
+    const prev = i>0 ? pts[i-1] : null;
+    const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
+    m.bindPopup(popupContent(stop,day,prev));
+    m.addTo(layerGroup);
+  });
+
+  if (pts.length>1) {
+    L.polyline(pts.map(s=>[s.lat,s.lng]),{color:c,weight:2.5,opacity:.55,dashArray:'7 5'}).addTo(layerGroup);
+  }
+
+  if (pts.length) leafletMap.fitBounds(L.latLngBounds(pts.map(s=>[s.lat,s.lng])),{padding:[60,60],maxZoom:14});
+
+  const routeUrl = gMapsDayRoute(pts);
+  const card = document.getElementById('day-card');
+  card.style.display = 'block';
+  card.style.borderLeftColor = c;
+  card.innerHTML = `
+    <div class="dc-date">${day.date}</div>
+    <div class="dc-title">${day.title}</div>
+    <div class="dc-meta">${pts.length} stops · ${day.city}</div>
+    ${routeUrl ? `<a class="dc-route" href="${routeUrl}" target="_blank">🗺️ Full route in Google Maps</a>` : ''}`;
+}
+</script>
+</body>
+</html>
