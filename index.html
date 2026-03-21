@@ -1231,7 +1231,12 @@ function revealApp() {
   document.getElementById('google-connect').style.display = 'none';
   document.getElementById('topbar').style.display = 'flex';
   document.getElementById('app').classList.add('show');
-  requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
+  requestAnimationFrame(() => {
+    if (leafletMap) {
+      leafletMap.invalidateSize();
+      if (tripData && tripData.days) renderMarkers(tripData.days);
+    }
+  });
   loadMapsAPI();
 }
 
@@ -2178,9 +2183,15 @@ function toggleDay(day, el, noScroll = false) {
 // ─── Leaflet map ──────────────────────────────────────────────────
 function initMap(days) {
   if (!leafletMap) {
-    leafletMap = L.map('map',{center:[35.5,137],zoom:5});
+    leafletMap = L.map('map',{
+      center:[35.5,137],
+      zoom:5,
+      minZoom:3,
+      maxBounds:[[-85,-Infinity],[85,Infinity]],
+      maxBoundsViscosity:1.0
+    });
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
-      attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19
+      attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19, noWrap:true
     }).addTo(leafletMap);
     layerGroup = L.layerGroup().addTo(leafletMap);
     // On mobile: tapping the map collapses the bottom sheet
