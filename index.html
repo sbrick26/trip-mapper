@@ -1231,7 +1231,12 @@ function revealApp() {
   document.getElementById('google-connect').style.display = 'none';
   document.getElementById('topbar').style.display = 'flex';
   document.getElementById('app').classList.add('show');
-  requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
+  requestAnimationFrame(() => {
+    if (leafletMap) {
+      leafletMap.invalidateSize();
+      if (tripData && tripData.days) renderMarkers(tripData.days);
+    }
+  });
   loadMapsAPI();
 }
 
