@@ -175,6 +175,18 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .tx-label { font-size:11px; font-weight:600; }
 .tx-detail { font-size:10px; color:var(--muted); margin-top:2px; line-height:1.4; }
 
+/* Transit connector between days */
+.transit-conn {
+  display:flex; align-items:center; justify-content:center; gap:6px;
+  padding:6px 14px; color:var(--muted); font-size:10px; font-weight:600;
+  letter-spacing:.3px; text-transform:uppercase; position:relative;
+}
+.transit-conn::before, .transit-conn::after {
+  content:''; flex:1; height:1px; background:var(--border);
+}
+.tc-icon { font-size:13px; line-height:1; }
+.tc-route { font-size:9px; white-space:nowrap; }
+
 /* Timeline stops */
 .tl { position:relative; }
 .tl::before {
@@ -360,6 +372,10 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
     white-space:nowrap; -webkit-tap-highlight-color:transparent;
   }
   .s-tab.on { border-color:var(--accent); color:var(--accent); background:rgba(200,168,122,.1); }
+  .s-transit-ind {
+    flex-shrink:0; font-size:10px; display:flex; align-items:center;
+    color:var(--muted); opacity:.6; padding:0 1px;
+  }
 
   /* ── Scrollable day list inside sheet ── */
   .sheet-body {
@@ -818,15 +834,24 @@ function annotateStopsWithSheetRows() {
 }
 
 // Build `cities` array for every day by scanning stop geoQueries for known city names.
-// This handles cached data that lacks `cities`, and keeps the array up-to-date after add/delete.
+// Also ensures every stop has a `city` field based on its geoQuery.
+// This handles cached data that lacks `cities`/stop.city, and keeps them up-to-date after add/delete.
 function normalizeCities() {
   if (!tripData?.days) return;
   const knownCities = Object.keys(CITY_COLORS).filter(c => c !== 'transit');
   tripData.days.forEach(day => {
     const found = new Set();
-    // Scan each stop's geoQuery for city name mentions
+    // Scan each stop's geoQuery for city name mentions; also set stop.city if missing
     (day.stops || []).forEach(stop => {
       const q = (stop.geoQuery || '').toLowerCase();
+      const n = (stop.name || '').toLowerCase();
+      if (!stop.city || stop.city === 'transit') {
+        // Infer stop city from geoQuery or name
+        const match = knownCities.find(city => q.includes(city) || n.includes(city));
+        stop.city = match || (day.city !== 'transit' ? day.city : null);
+      }
+      if (stop.city && stop.city !== 'transit') found.add(stop.city);
+      // Also scan geoQuery for day-level cities array
       knownCities.forEach(city => {
         if (q.includes(city)) found.add(city);
       });
@@ -837,7 +862,22 @@ function normalizeCities() {
     if (Array.isArray(day.cities)) {
       day.cities.forEach(c => { if (c !== 'transit') found.add(c); });
     }
-    day.cities = found.size > 0 ? [...found] : [day.city || 'transit'];
+    // If day.city is "transit" (cached old data), reassign to the last real city from stops
+    if (!day.city || day.city === 'transit') {
+      // Prefer destination: use the last stop's city, or first found city
+      const lastStopCity = [...(day.stops || [])].reverse().find(s => s.city && s.city !== 'transit')?.city;
+      if (lastStopCity) {
+        day.city = lastStopCity;
+        found.add(lastStopCity);
+      } else if (found.size > 0) {
+        day.city = [...found].pop(); // last city found
+      }
+    }
+    day.cities = found.size > 0 ? [...found] : [day.city || 'tokyo'];
+    // Second pass: fill any stops still missing a city with the resolved day.city
+    (day.stops || []).forEach(stop => {
+      if (!stop.city || stop.city === 'transit') stop.city = day.city;
+    });
   });
 }
 
@@ -1088,17 +1128,18 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
     {
       "id": 1,
       "date": "Wed, Mar 25",
-      "title": "Short descriptive title for the day",
-      "city": "transit",
-      "cities": ["transit"],
-      "transport": null,
+      "title": "Travel to Seoul & Explore Myeongdong",
+      "city": "seoul",
+      "cities": ["seoul"],
+      "transport": {"icon":"✈️","route":"SFO → ICN","detail":"Depart 12:40 PM, ~11h flight"},
       "stops": [
         {
           "time": "12:40 PM",
           "name": "Leave SFO",
-          "detail": "Flight to Tokyo via Seoul",
+          "detail": "Flight to Seoul",
           "emoji": "✈️",
           "type": "transit",
+          "city": "seoul",
           "geoQuery": "San Francisco International Airport SFO California USA"
         }
       ]
@@ -1107,16 +1148,19 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
 }
 
 RULES:
-- "city": the PRIMARY city for the day. Must be one of: seoul, tokyo, fuji, kyoto, osaka, nara, transit (lowercase).
-  IMPORTANT: Only use "transit" for days spent ENTIRELY in transit with no stops in any city (e.g. a full day on a plane).
-  If a day has transit BUT also has stops in a city, use that city as the primary. For example, a day taking a shinkansen
-  FROM Fuji TO Kyoto with stops in both should use one of those cities (prefer the destination).
+- "city": the PRIMARY city for the day. Must be one of: seoul, tokyo, fuji, kyoto, osaka, nara (lowercase).
+  NEVER use "transit" as a day city. Every day must be tagged with a real destination city.
+  If a day involves travel between cities, use the DESTINATION city (where the traveler ends up or spends most time).
+  Examples: A day flying from SFO to Seoul → "seoul". A day taking shinkansen from Tokyo to Fuji with sightseeing
+  around Mt Fuji → "fuji". A day traveling from Fuji to Kyoto → "kyoto" (destination).
+  Even if a day is mostly transit (e.g. long flight), use the arrival city.
 - "cities": an array of ALL cities touched on this day (lowercase). This is used for filtering.
   Examples: a day in Tokyo → ["tokyo"]. A travel day from Fuji to Kyoto with stops in both → ["fuji","kyoto"].
-  A pure flight day with no city stops → ["transit"]. A day exploring Tokyo and Nara → ["tokyo","nara"].
+  A day exploring Tokyo and Nara → ["tokyo","nara"]. NEVER include "transit" in this array.
   NEVER leave a city out — every city where the day has stops must be listed.
-- "transport": null OR {"icon":"🚄","route":"A → B","detail":"departure time, duration, cost if known"}
-  Use this for inter-city travel days (flights, shinkansen, buses between cities)
+- "transport": null OR {"icon":"✈️","route":"A → B","detail":"departure time, duration, cost if known"}
+  Use this for ANY day that involves inter-city travel (flights, shinkansen, buses between cities).
+  This is shown as a banner above the day's stops. The icon should match the mode of transport.
 - "geoQuery": a specific search string for geocoding. Include the landmark/place name + neighborhood + city + country.
   Examples: "Meiji Shrine Shibuya Tokyo Japan", "Gwangjang Market Seoul South Korea", "SFO Airport San Francisco USA"
   NEVER leave geoQuery empty — every stop needs one for the map.
@@ -1124,6 +1168,11 @@ RULES:
   shinkansen, airport arrivals/departures, station transfers, taxi/uber rides, check-in/check-out of hotels
   that are just logistics). Use "activity" for sightseeing, restaurants, shrines, parks, shopping, experiences,
   museums, landmarks — anything the traveler is going TO as a destination.
+- "city": the city THIS SPECIFIC STOP is located in (lowercase). Must be one of: seoul, tokyo, fuji, kyoto, osaka, nara.
+  IMPORTANT: On a travel day, stops may span multiple cities. Assign each stop to the city it is
+  physically located in based on the order of travel in the itinerary. For example, if a day starts with
+  "Leave Seoul" then "Arrive Narita" then "Shibuya Sky", the first stop is "seoul", the second is "tokyo",
+  and the third is "tokyo". For departure airports/stations, use the city they are in (SFO → nearest city in list or destination).
 - "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
 - "detail": combine Address + Notes columns. Use \\n for line breaks.
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
@@ -1262,7 +1311,7 @@ function buildApp(data) {
   // City filters
   const filterDiv = document.getElementById('filters');
   filterDiv.innerHTML = '';
-  const cities = ['all',...(data.cities||[])];
+  const cities = ['all',...(data.cities||[]).filter(c => c !== 'transit')];
   cities.forEach(c => {
     const btn = document.createElement('button');
     btn.className = 'cf' + (c==='all'?' on':'');
@@ -1272,7 +1321,7 @@ function buildApp(data) {
       btn.classList.add('on');
       const days = c==='all' ? data.days : data.days.filter(d => (d.cities || [d.city]).includes(c));
       buildSidebar(days, data.days);
-      renderMarkers(days);
+      renderMarkers(days, c==='all' ? null : c);
     };
     filterDiv.appendChild(btn);
   });
@@ -2099,6 +2148,14 @@ function buildSidebar(days, allDays) {
 
     const strip = document.getElementById('s-tabs');
     allDays.forEach(day => {
+      // Insert transit indicator between tabs when this day has transport
+      if (day.transport) {
+        const ind = document.createElement('span');
+        ind.className = 's-transit-ind';
+        ind.textContent = day.transport.icon || '✈️';
+        ind.title = day.transport.route || '';
+        strip.appendChild(ind);
+      }
       const c = col(day.city);
       const tab = document.createElement('button');
       tab.className = 's-tab';
@@ -2169,11 +2226,20 @@ function buildSidebar(days, allDays) {
             </div>
           </div>` : ''}
         <div class="tl">${timelineHtml}</div>
+
         ${routeUrl ? `
           <a class="day-route-btn" href="${routeUrl}" target="_blank">
             🗺️ Open full day route in Google Maps
           </a>` : ''}
       </div>`;
+
+    // Insert transit connector BEFORE this day if it has transport info
+    if (day.transport) {
+      const conn = document.createElement('div');
+      conn.className = 'transit-conn';
+      conn.innerHTML = `<span class="tc-icon">${day.transport.icon || '✈️'}</span><span class="tc-route">${day.transport.route || ''}</span>`;
+      body.appendChild(conn);
+    }
 
     el.querySelector('.day-hd').onclick = () => toggleDay(day, el);
     body.appendChild(el);
@@ -2330,17 +2396,23 @@ function popupContent(stop, day, prevStop, stopIdx) {
     </div>`;
 }
 
-function renderMarkers(days) {
+function renderMarkers(days, filterCity) {
   layerGroup.clearLayers();
   markerRegistry = {};
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
   days.forEach(day => {
-    const c = col(day.city);
-    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180&&s.type!=='transit').forEach((stop,i)=>{
+    (day.stops||[]).filter(s=>{
+      if (!s.lat||!s.lng||Math.abs(s.lat)>90||Math.abs(s.lng)>180) return false;
+      if (s.type==='transit') return false;
+      // When a specific city tab is selected, only show stops IN that city
+      if (filterCity && (s.city||day.city) !== filterCity) return false;
+      return true;
+    }).forEach((stop)=>{
       const origIdx = day.stops.indexOf(stop);
       const prev = origIdx>0 ? day.stops[origIdx-1] : null;
+      const c = col(stop.city || day.city);
       const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
       m.bindPopup(popupContent(stop,day,prev,origIdx));
       m.addTo(layerGroup);
@@ -2355,11 +2427,12 @@ function renderMarkers(days) {
 function renderDayMarkers(day) {
   layerGroup.clearLayers();
   markerRegistry = {};
-  const c = col(day.city);
+  const dayColor = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
   pts.forEach((stop,i) => {
     const prev = i>0 ? pts[i-1] : null;
+    const c = col(stop.city || day.city);
     const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
     m.bindPopup(popupContent(stop,day,prev,i));
     m.addTo(layerGroup);
@@ -2367,7 +2440,7 @@ function renderDayMarkers(day) {
   });
 
   if (pts.length>1) {
-    L.polyline(pts.map(s=>[s.lat,s.lng]),{color:c,weight:2.5,opacity:.55,dashArray:'7 5'}).addTo(layerGroup);
+    L.polyline(pts.map(s=>[s.lat,s.lng]),{color:dayColor,weight:2.5,opacity:.55,dashArray:'7 5'}).addTo(layerGroup);
   }
 
   if (pts.length) {
@@ -2378,7 +2451,7 @@ function renderDayMarkers(day) {
   const routeUrl = gMapsDayRoute(pts);
   const card = document.getElementById('day-card');
   card.style.display = 'block';
-  card.style.borderLeftColor = c;
+  card.style.borderLeftColor = dayColor;
   card.innerHTML = `
     <div class="dc-date">${day.date}</div>
     <div class="dc-title">${day.title}</div>
