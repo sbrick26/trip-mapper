@@ -260,6 +260,11 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .pu-btn:hover { border-color:var(--accent); color:var(--accent); }
 .pu-btn.dir { border-color:#5bbfe830; color:#5bbfe8; background:#5bbfe80a; }
 .pu-btn.dir:hover { border-color:#5bbfe8; }
+.pu-btn.pu-itin { border-color:#b05be830; color:#b05be8; background:#b05be80a; font-family:inherit; cursor:pointer; }
+.pu-btn.pu-itin:hover { border-color:#b05be8; }
+
+.tl-stop-link { cursor:pointer; border-radius:6px; transition:background .12s; }
+.tl-stop-link:hover { background:rgba(255,255,255,.04); }
 
 /* Map day-card overlay */
 #day-card {
@@ -442,6 +447,7 @@ let tripData = null;
 let leafletMap = null;
 let layerGroup = null;
 let activeDay = null;
+let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
 
 // ─── Setup ────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
@@ -906,6 +912,55 @@ function buildApp(data) {
   initMap(data.days);
 }
 
+// Scroll `el` to the top of `sheetBody` using getBoundingClientRect for accuracy
+function scrollToEl(el, sheetBody, offset = 6) {
+  const bodyRect = sheetBody.getBoundingClientRect();
+  const elRect   = el.getBoundingClientRect();
+  sheetBody.scrollTop = sheetBody.scrollTop + (elRect.top - bodyRect.top) - offset;
+}
+
+// Called from popup "View in Itinerary" button
+function viewInItinerary(dayId, stopIdx) {
+  const day = (tripData?.days || []).find(d => d.id === dayId);
+  if (!day) return;
+  const sb       = document.getElementById('sidebar');
+  const dayEl    = document.getElementById(`day-${dayId}`);
+  const stopEl   = document.getElementById(`stop-${dayId}-${stopIdx}`);
+  const sheetBody = sb?.querySelector('.sheet-body');
+
+  leafletMap?.closePopup();
+
+  if (window.innerWidth <= 768) {
+    // Open sheet, expand day, scroll to the specific stop
+    sb.classList.add('sheet-open');
+    if (dayEl && !dayEl.classList.contains('open')) toggleDay(day, dayEl, true);
+    if (stopEl && sheetBody) {
+      setTimeout(() => {
+        scrollToEl(stopEl, sheetBody, 6);
+      }, 200); // wait for accordion + sheet transition
+    }
+  } else {
+    // Desktop: expand day, scroll sidebar to stop
+    if (dayEl && !dayEl.classList.contains('open')) toggleDay(day, dayEl, true);
+    if (stopEl) {
+      setTimeout(() => {
+        stopEl.scrollIntoView({behavior:'smooth', block:'start'});
+      }, 150);
+    }
+  }
+
+  // Sync tab highlight
+  const tab = document.querySelector(`.s-tab[data-day-id="${dayId}"]`);
+  if (tab) {
+    document.querySelectorAll('.s-tab').forEach(t => { t.classList.remove('on'); t.style.color=''; t.style.borderColor=''; });
+    const c = col(day.city);
+    tab.classList.add('on'); tab.style.borderColor = c; tab.style.color = c;
+    tab.scrollIntoView({behavior:'smooth', block:'nearest', inline:'center'});
+  }
+  const label = document.getElementById('s-label');
+  if (label) label.textContent = `Day ${day.id} · ${day.title}`;
+}
+
 function buildSidebar(days, allDays) {
   const sb = document.getElementById('sidebar');
   sb.innerHTML = '';
@@ -934,22 +989,20 @@ function buildSidebar(days, allDays) {
       tab.textContent = `D${day.id} · ${cityLabel}`;
       tab.onclick = e => {
         e.stopPropagation();
-        sb.classList.add('sheet-open');
-        strip.querySelectorAll('.s-tab').forEach(t => { t.classList.remove('on'); t.style.color=''; t.style.borderColor=''; });
-        tab.classList.add('on');
-        tab.style.borderColor = c;
-        tab.style.color = c;
-        document.getElementById('s-label').textContent = `Day ${day.id} · ${day.title}`;
+        // Tab taps fly the map to that day — sheet stays in current open/closed state
         const el = document.getElementById(`day-${day.id}`);
         if (el) {
           const d = allDays.find(d => d.id === day.id);
           if (d) {
-            toggleDay(d, el);
-            setTimeout(() => {
+            if (sb.classList.contains('sheet-open')) {
+              // Sheet already open: expand day and scroll to it
+              toggleDay(d, el);
               const sheetBody = sb.querySelector('.sheet-body');
-              if (sheetBody) sheetBody.scrollTop = el.offsetTop;
-              else el.scrollIntoView({behavior:'smooth',block:'start'});
-            }, 120);
+              if (sheetBody) scrollToEl(el, sheetBody);
+            } else {
+              // Sheet closed: just fly map to this day's markers
+              renderDayMarkers(d);
+            }
           }
         }
       };
@@ -1006,8 +1059,10 @@ function buildSidebar(days, allDays) {
         }
       }
 
+      const hasCoords = !!(stop.lat && stop.lng);
       timelineHtml += `
-        <div class="tl-stop">
+        <div class="tl-stop${hasCoords?' tl-stop-link':''}" id="stop-${day.id}-${i}"
+          ${hasCoords ? `data-day-id="${day.id}" data-stop-idx="${i}" data-lat="${stop.lat}" data-lng="${stop.lng}"` : ''}>
           <div class="tl-dot" style="background:${c}"></div>
           ${connHtml}
           <div class="stop-time">${stop.time||''}</div>
@@ -1049,9 +1104,33 @@ function buildSidebar(days, allDays) {
     el.querySelector('.day-hd').onclick = () => toggleDay(day, el);
     body.appendChild(el);
   });
+
+  // ── Stop click delegation: fly to stop on map; close sheet on mobile ──
+  body.addEventListener('click', e => {
+    const stopEl = e.target.closest('.tl-stop-link');
+    if (!stopEl) return;
+    // Don't trigger when clicking links/buttons inside the stop
+    if (e.target.closest('a, button')) return;
+    const dayId   = +stopEl.dataset.dayId;
+    const stopIdx = +stopEl.dataset.stopIdx;
+    const lat     = +stopEl.dataset.lat;
+    const lng     = +stopEl.dataset.lng;
+    if (!lat || !lng) return;
+
+    const day = (tripData?.days || []).find(d => d.id === dayId);
+    if (day) renderDayMarkers(day);
+
+    leafletMap.flyTo([lat, lng], 16, {duration: 0.8});
+    const mk = markerRegistry[`${dayId}-${stopIdx}`];
+    if (mk) setTimeout(() => mk.openPopup(), 850);
+
+    if (window.innerWidth <= 768) {
+      document.getElementById('sidebar').classList.remove('sheet-open');
+    }
+  });
 }
 
-function toggleDay(day, el) {
+function toggleDay(day, el, noScroll = false) {
   const isOpen = el.classList.contains('open');
   document.querySelectorAll('.day').forEach(d=>d.classList.remove('open'));
   activeDay = null;
@@ -1060,12 +1139,13 @@ function toggleDay(day, el) {
   if (!isOpen) {
     el.classList.add('open');
     activeDay = day.id;
-    // Scroll within .sheet-body on mobile; native scrollIntoView on desktop
-    const sheetBody = document.querySelector('#sidebar .sheet-body');
-    if (sheetBody && window.innerWidth <= 768) {
-      setTimeout(() => { sheetBody.scrollTop = el.offsetTop; }, 60);
-    } else {
-      el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    if (!noScroll) {
+      const sheetBody = document.querySelector('#sidebar .sheet-body');
+      if (sheetBody && window.innerWidth <= 768) {
+        setTimeout(() => scrollToEl(el, sheetBody), 60);
+      } else {
+        el.scrollIntoView({behavior:'smooth', block:'nearest'});
+      }
     }
     renderDayMarkers(day);
 
@@ -1113,7 +1193,7 @@ function mkIcon(color, emoji) {
   });
 }
 
-function popupContent(stop, day, prevStop) {
+function popupContent(stop, day, prevStop, stopIdx) {
   const mUrl = gMapsPlace(stop);
   let dirBtn = '';
   if (prevStop?.lat && prevStop?.lng) {
@@ -1133,11 +1213,13 @@ function popupContent(stop, day, prevStop) {
     <div class="pu-acts">
       <a class="pu-btn" href="${mUrl}" target="_blank">📍 Open in Maps</a>
       ${dirBtn}
+      <button class="pu-btn pu-itin" onclick="viewInItinerary(${day.id},${stopIdx})">📋 View in Itinerary</button>
     </div>`;
 }
 
 function renderMarkers(days) {
   layerGroup.clearLayers();
+  markerRegistry = {};
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
@@ -1146,8 +1228,9 @@ function renderMarkers(days) {
     (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180).forEach((stop,i)=>{
       const prev = i>0 ? day.stops[i-1] : null;
       const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
-      m.bindPopup(popupContent(stop,day,prev));
+      m.bindPopup(popupContent(stop,day,prev,i));
       m.addTo(layerGroup);
+      markerRegistry[`${day.id}-${i}`] = m;
       bounds.push([stop.lat,stop.lng]);
     });
   });
@@ -1157,14 +1240,16 @@ function renderMarkers(days) {
 
 function renderDayMarkers(day) {
   layerGroup.clearLayers();
+  markerRegistry = {};
   const c = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
   pts.forEach((stop,i) => {
     const prev = i>0 ? pts[i-1] : null;
     const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
-    m.bindPopup(popupContent(stop,day,prev));
+    m.bindPopup(popupContent(stop,day,prev,i));
     m.addTo(layerGroup);
+    markerRegistry[`${day.id}-${i}`] = m;
   });
 
   if (pts.length>1) {
