@@ -402,7 +402,7 @@ async function doRefresh() {
     const el = document.getElementById(id);
     el.className = 'ls'; el.textContent = label;
   });
-  await generate();
+  await generate(true); // force=true bypasses cache
   document.getElementById('app').style.opacity = '1';
 }
 
@@ -414,14 +414,59 @@ function step(id, state) {
 }
 function setMsg(t) { document.getElementById('load-msg').textContent = t; }
 
+// ─── Simple hash of CSV content for cache key ─────────────────────
+function hashCSV(csv) {
+  const str = (csv.Itinerary||'') + (csv.Transportation||'') + (csv.Hotels||'') + (csv.Flights||'');
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h, 31) + str.charCodeAt(i) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 // ─── Main generation pipeline ─────────────────────────────────────
-async function generate() {
+async function generate(force = false) {
   try {
     step('ls1','active'); setMsg('Fetching your Google Sheet...');
     const csv = await fetchSheet();
     console.log('[generate] Sheet tabs received:', Object.keys(csv).filter(k=>csv[k].length>0));
     step('ls1','done');
 
+    // ── Cache check ──────────────────────────────────────────────
+    if (!force) {
+      const hash = hashCSV(csv);
+      step('ls2','active'); setMsg('Checking cache...');
+      try {
+        const cacheRes = await fetch(`${WORKER_URL}?cache_get=${hash}`);
+        const cacheJson = await cacheRes.json();
+        if (cacheJson.hit) {
+          console.log('[generate] Cache hit! Skipping Claude calls.');
+          const ls2el = document.getElementById('ls2');
+          ls2el.textContent = '⚡ Loaded from cache';
+          step('ls2','done');
+          const ls3el = document.getElementById('ls3');
+          ls3el.textContent = '⚡ Geocoding skipped (cached)';
+          step('ls3','done');
+          tripData = cacheJson.data;
+          step('ls4','active'); setMsg('Building map...');
+          await delay(300);
+          buildApp(tripData);
+          step('ls4','done');
+          await delay(500);
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('topbar').style.display  = 'flex';
+          document.getElementById('app').classList.add('show');
+          return;
+        }
+      } catch(e) {
+        console.warn('[generate] Cache check failed, proceeding without cache:', e.message);
+      }
+    } else {
+      console.log('[generate] Force refresh — bypassing cache.');
+    }
+
+    // ── Full Claude pipeline ──────────────────────────────────────
+    const hash = hashCSV(csv);
     step('ls2','active'); setMsg('Claude is reading your itinerary...');
     const parsed = await claudeParse(csv);
     console.log('[generate] Parsed trip:', parsed.tripName, '—', parsed.days?.length, 'days');
@@ -433,6 +478,14 @@ async function generate() {
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
     tripData = geocoded;
+
+    // Store result in KV cache (non-blocking)
+    fetch(`${WORKER_URL}/cache`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash, data: tripData })
+    }).then(() => console.log('[generate] Cached result in KV (hash:', hash, ')'))
+      .catch(e => console.warn('[generate] Cache store failed (non-fatal):', e.message));
 
     step('ls4','active'); setMsg('Building map...');
     await delay(300);
