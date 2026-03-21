@@ -1257,11 +1257,25 @@ function doConnectGoogle(silent = false) {
   }
   const btn = document.getElementById('gc-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+
+  // On mobile, silent auth (prompt:'') often never fires its callback because
+  // there's no active user gesture — add a fallback that re-enables the button
+  // so the user can tap it themselves to trigger the interactive flow.
+  let callbackFired = false;
+  const fallback = silent ? setTimeout(() => {
+    if (!callbackFired && btn) {
+      btn.disabled = false;
+      btn.textContent = '🔗 Connect Google Sheets';
+    }
+  }, 8000) : null;
+
   const client = google.accounts.oauth2.initTokenClient({
     client_id: GOOGLE_CLIENT_ID,
     scope: 'https://www.googleapis.com/auth/spreadsheets',
     prompt: silent ? '' : undefined,
     callback: async (resp) => {
+      callbackFired = true;
+      if (fallback) clearTimeout(fallback);
       if (resp.error) {
         console.warn('[google] OAuth error in connect screen:', resp);
         if (btn) { btn.disabled = false; btn.textContent = '🔗 Connect Google Sheets'; }
@@ -1394,6 +1408,9 @@ function closeAddPanel() {
     document.getElementById('ap-map-btn').classList.remove('active');
     document.getElementById('ap-map-hint').classList.remove('show');
   }
+  // Leaflet tiles go white when the panel slide animation changes the perceived
+  // viewport — force a size recalculation after the 280ms CSS transition ends.
+  setTimeout(() => leafletMap?.invalidateSize(), 320);
 }
 
 function toggleMapPinMode() {
@@ -1542,6 +1559,35 @@ function selectPlace(result, displayName) {
   }
 }
 
+// ─── Build a clean geoQuery matching the claudeParse format ───────
+// Called for newly-added stops so transit direction links are as
+// specific as the ones generated during the initial loading phase.
+const CITY_FULL = {
+  seoul:'Seoul South Korea', tokyo:'Tokyo Japan', fuji:'Fuji Japan',
+  kyoto:'Kyoto Japan', osaka:'Osaka Japan', nara:'Nara Japan', transit:'Japan'
+};
+async function buildRichGeoQuery(name, existing, cityId) {
+  // Already a clean Place-API/Nominatim description → keep it
+  const isRawCoords = /^-?\d+\.?\d*,\s*-?\d+\.?\d*$/.test((existing || '').trim());
+  const isBarelyNamed = !existing || existing.trim() === name.trim();
+  if (!isRawCoords && !isBarelyNamed) return existing;
+
+  const city = CITY_FULL[cityId] || 'Japan';
+  const prompt =
+    `Generate a specific geocoding query for this travel location.\n` +
+    `Place: "${name}"\nCity context: ${city}\n` +
+    `Format exactly like: "Landmark Neighborhood City Country"\n` +
+    `Examples: "Fushimi Inari Shrine Fushimi Kyoto Japan", "Dotonbori Namba Osaka Japan"\n` +
+    `Return ONLY the query string, no quotes, no explanation.`;
+  try {
+    const raw = await claudeCall([{ role:'user', content:prompt }], 120);
+    return raw.trim().replace(/^["']|["']$/g, '') || existing || name;
+  } catch(e) {
+    console.warn('[buildRichGeoQuery] failed:', e.message);
+    return existing || name;
+  }
+}
+
 // ─── Submit: add stop in-memory + write to sheet ──────────────────
 async function submitAddStop() {
   const day = tripData?.days.find(d => d.id === addPanelDayId);
@@ -1573,6 +1619,11 @@ async function submitAddStop() {
   btn.textContent = 'Adding…';
 
   try {
+    // Normalize geoQuery to match the "Landmark City Country" format Claude
+    // generates during initial parse — keeps transit direction links clean.
+    btn.textContent = 'Looking up…';
+    stop.geoQuery = await buildRichGeoQuery(stop.name, stop.geoQuery, day.city);
+
     // Geocode via Claude if no coordinates (e.g. typed name without selecting a result)
     if (!stop.lat || !stop.lng) {
       btn.textContent = 'Geocoding…';
@@ -2212,7 +2263,10 @@ function renderDayMarkers(day) {
     L.polyline(pts.map(s=>[s.lat,s.lng]),{color:c,weight:2.5,opacity:.55,dashArray:'7 5'}).addTo(layerGroup);
   }
 
-  if (pts.length) leafletMap.fitBounds(L.latLngBounds(pts.map(s=>[s.lat,s.lng])),{padding:[60,60],maxZoom:14});
+  if (pts.length) {
+    leafletMap.invalidateSize();
+    leafletMap.fitBounds(L.latLngBounds(pts.map(s=>[s.lat,s.lng])),{padding:[60,60],maxZoom:14});
+  }
 
   const routeUrl = gMapsDayRoute(pts);
   const card = document.getElementById('day-card');
