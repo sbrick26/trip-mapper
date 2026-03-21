@@ -1239,9 +1239,17 @@ function checkGoogleAndReveal() {
   if (!gToken) {
     document.getElementById('loading').style.display = 'none';
     document.getElementById('google-connect').style.display = 'flex';
-    // Auto-reconnect silently if they connected before in this session
-    if (sessionStorage.getItem('_tmap_google')) {
+    const prevConnected = sessionStorage.getItem('_tmap_google');
+    // On mobile, requestAccessToken() requires a direct user gesture — the
+    // silent prompt:'' path never fires its callback, leaving the button stuck.
+    // Just show the button; one tap is all it takes (Google won't re-ask for
+    // permissions). On desktop, try silent re-auth automatically.
+    const isMobile = window.matchMedia('(pointer:coarse)').matches;
+    if (prevConnected && !isMobile) {
       doConnectGoogle(true);
+    } else if (prevConnected) {
+      const btn = document.getElementById('gc-btn');
+      if (btn) btn.textContent = '🔗 Reconnect Google Sheets';
     }
   } else {
     revealApp();
@@ -1437,6 +1445,19 @@ function setSearchMode(mode) {
   addPanelLat = null; addPanelLng = null; addPanelGeoQuery = null; addPanelPlaceName = null;
 }
 
+// ─── PlacesService helper — uses a dedicated hidden div so Google Maps
+// never injects attribution HTML into the Leaflet map container (which
+// corrupts Leaflet's DOM and causes the map to go white).
+let _placesSvcEl = null;
+function getPlacesService() {
+  if (!_placesSvcEl) {
+    _placesSvcEl = document.createElement('div');
+    _placesSvcEl.style.display = 'none';
+    document.body.appendChild(_placesSvcEl);
+  }
+  return new google.maps.places.PlacesService(_placesSvcEl);
+}
+
 let addPanelSearchTimer = null;
 function onAddSearch() {
   clearTimeout(addPanelSearchTimer);
@@ -1468,7 +1489,7 @@ async function searchPlaces(query) {
           btn.className = 'ap-result';
           btn.textContent = p.description;
           btn.onclick = () => {
-            const placeSvc = new google.maps.places.PlacesService(leafletMap.getContainer());
+            const placeSvc = getPlacesService();
             placeSvc.getDetails({ placeId: p.place_id, fields: ['geometry','name','formatted_address'] }, (place, st) => {
               if (st !== google.maps.places.PlacesServiceStatus.OK || !place) return;
               const loc = place.geometry.location;
@@ -1497,7 +1518,7 @@ async function searchPlaces(query) {
           btn.textContent = p.description;
           btn.onclick = () => {
             // Fetch place details to get lat/lng
-            const placeSvc = new google.maps.places.PlacesService(leafletMap.getContainer());
+            const placeSvc = getPlacesService();
             placeSvc.getDetails({ placeId: p.place_id, fields: ['geometry','name','formatted_address'] }, (place, st) => {
               if (st !== google.maps.places.PlacesServiceStatus.OK || !place) return;
               const loc = place.geometry.location;
