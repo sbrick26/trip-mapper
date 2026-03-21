@@ -457,11 +457,10 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 
 // ─── Fetch sheet (server-side via Cloudflare Worker sheet proxy) ──
 async function fetchSheetTab(tab) {
-  // Try multiple Google Sheets URL formats for robustness
+  // IMPORTANT: Only gviz/tq supports ?sheet=TabName (by name).
+  // The /export endpoint ignores sheet= and requires gid= (numeric ID),
+  // so it always returns the FIRST tab — useless for named tab lookup.
   const urls = [
-    // Format 1: export endpoint (most common, follows redirects)
-    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(tab)}`,
-    // Format 2: gviz endpoint (direct CSV, no redirect)
     `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`,
   ];
 
