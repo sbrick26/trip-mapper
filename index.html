@@ -730,6 +730,31 @@ function hashCSV(csv) {
 }
 
 // ─── Build row map: CSV line # for each stop (for sheet write-back) ─
+// Splits a CSV line into up to maxCells cells, handling double-quoted fields
+function splitCsvRow(line, maxCells) {
+  const cells = [];
+  let i = 0;
+  while (i < line.length && cells.length < maxCells) {
+    if (line[i] === '"') {
+      i++;
+      let cell = '';
+      while (i < line.length) {
+        if (line[i] === '"' && line[i+1] === '"') { cell += '"'; i += 2; }
+        else if (line[i] === '"') { i++; break; }
+        else { cell += line[i++]; }
+      }
+      cells.push(cell);
+      if (i < line.length && line[i] === ',') i++;
+    } else {
+      const end = line.indexOf(',', i);
+      if (end === -1) { cells.push(line.slice(i)); break; }
+      cells.push(line.slice(i, end));
+      i = end + 1;
+    }
+  }
+  return cells;
+}
+
 function buildRowMap(csvText) {
   if (!csvText) return {};
   const lines = csvText.split('\n');
@@ -742,28 +767,37 @@ function buildRowMap(csvText) {
     const line = lines[i];
     if (!line.trim()) continue;
 
-    // Parse first cell (handle CSV quoting)
-    let firstCell = '';
-    if (line.startsWith('"')) {
-      const close = line.indexOf('"', 1);
-      firstCell = close > 0 ? line.slice(1, close) : line;
-    } else {
-      firstCell = line.split(',')[0];
-    }
-    firstCell = firstCell.trim();
-    if (!firstCell) continue;
+    // Parse first two cells (col A = time/day, col B = Activity/name)
+    const cells = splitCsvRow(line, 2);
+    const firstCell  = (cells[0] || '').trim();
+    const secondCell = (cells[1] || '').trim();
 
-    const isDay = weekdayRe.test(firstCell) && !timeRe.test(firstCell);
+    if (!firstCell && !secondCell) continue;
+
+    const isDay = firstCell && weekdayRe.test(firstCell) && !timeRe.test(firstCell);
     if (isDay) {
       dayId++;
       result[dayId] = { headerRow: i + 1, stops: [] }; // 1-indexed sheet row
-    } else if (dayId > 0) {
+    } else if (dayId > 0 && secondCell) {
+      // Only count rows that have an Activity/name (col B) — matches what Claude includes
       result[dayId].stops.push(i + 1); // 1-indexed sheet row
     }
   }
   console.log('[rowMap] Built map for', Object.keys(result).length, 'days,',
     Object.values(result).reduce((n, d) => n + d.stops.length, 0), 'stops');
   return result;
+}
+
+// After tripData is set, stamp each stop with its sheet row from rowMap
+function annotateStopsWithSheetRows() {
+  if (!tripData?.days) return;
+  tripData.days.forEach(day => {
+    const rm = rowMap[day.id];
+    if (!rm) return;
+    (day.stops || []).forEach((stop, i) => {
+      if (rm.stops[i] !== undefined) stop._sheetRow = rm.stops[i];
+    });
+  });
 }
 
 // ─── Main generation pipeline ─────────────────────────────────────
@@ -793,6 +827,7 @@ async function generate(force = false) {
           ls3el.textContent = '⚡ Geocoding skipped (cached)';
           step('ls3','done');
           tripData = cacheJson.data;
+          annotateStopsWithSheetRows();
           step('ls4','active'); setMsg('Building map...');
           await delay(300);
           buildApp(tripData);
@@ -825,6 +860,7 @@ async function generate(force = false) {
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
     tripData = geocoded;
+    annotateStopsWithSheetRows();
 
     // Store result in KV cache (non-blocking)
     fetch(`${WORKER_URL}/cache`, {
@@ -1623,8 +1659,9 @@ async function writeStopToSheet(dayId, insertAfterIdx, stop, insertAtArrayIdx) {
     throw new Error(err.error?.message || `Sheet write failed (${writeRes.status})`);
   }
 
-  // Step 3: Update rowMap to reflect the new row
+  // Step 3: Update rowMap + stamp _sheetRow on the stop
   shiftRowMap(dayId, insertAtArrayIdx, sheetRow);
+  stop._sheetRow = sheetRow;
   console.log('[sheets] ✓ Stop written to sheet row', sheetRow);
 }
 
@@ -1639,30 +1676,98 @@ function shiftRowMap(dayId, newStopArrayIdx, newRowNumber) {
   if (rowMap[dayId]) {
     rowMap[dayId].stops.splice(newStopArrayIdx, 0, newRowNumber);
   }
+  // Also shift _sheetRow on all in-memory stops
+  if (tripData?.days) {
+    tripData.days.forEach(d => {
+      (d.stops || []).forEach(s => {
+        if (s._sheetRow !== undefined && s._sheetRow >= newRowNumber) s._sheetRow++;
+      });
+    });
+  }
 }
 
 // ─── Delete stop ──────────────────────────────────────────────────
 async function deleteStop(dayId, stopIdx) {
   const day = tripData?.days.find(d => d.id === dayId);
   if (!day) return;
-  const stopName = day.stops[stopIdx]?.name || 'this stop';
+  const stop = day.stops[stopIdx]; // capture before splice
+  const stopName = stop?.name || 'this stop';
   if (!confirm(`Remove "${stopName}" from the itinerary?`)) return;
   day.stops.splice(stopIdx, 1);
   rebuildDaySidebar(dayId);
   renderMarkers(tripData.days);
   try {
-    await deleteStopFromSheet(dayId, stopIdx);
+    await deleteStopFromSheet(dayId, stopIdx, stop);
     await invalidateCache();
   } catch(e) {
     console.warn('[delete] Sheet remove failed (non-fatal):', e.message);
   }
 }
 
-async function deleteStopFromSheet(dayId, stopIdx) {
+async function deleteStopFromSheet(dayId, stopIdx, stop) {
   if (!gToken) return;
   const rm = rowMap[dayId];
-  if (!rm || rm.stops[stopIdx] === undefined) return;
-  const sheetRow = rm.stops[stopIdx]; // 1-indexed
+
+  // ── Step 1: Re-fetch the live sheet, rebuild rowMap, scope search to correct day ──
+  let sheetRow = null;
+  try {
+    const freshCsv = await fetchSheetTab('Itinerary');
+    if (freshCsv && freshCsv.length > 20) {
+      // Rebuild a fresh rowMap so we know exactly which rows belong to which day
+      const freshRowMap = buildRowMap(freshCsv);
+      const freshDayEntry = freshRowMap[dayId];
+
+      if (freshDayEntry && freshDayEntry.stops.length > 0) {
+        // Determine the row range owned by this day:
+        // from the first stop row down to just before the next day's header (or end of sheet)
+        const dayStopRows = new Set(freshDayEntry.stops);
+        const lines = freshCsv.split('\n');
+        const targetName = stop?.name;
+        const targetTime = stop?.time || '';
+
+        // Walk only the rows that belong to this day
+        for (const candidateRow of freshDayEntry.stops) {
+          const lineIdx = candidateRow - 1; // 0-indexed into lines array (row 1 = lines[0])
+          const line = lines[lineIdx];
+          if (!line || !line.trim()) continue;
+          const cells = splitCsvRow(line, 2);
+          const timeCell = (cells[0] || '').trim();
+          const nameCell = (cells[1] || '').trim();
+
+          if (targetName && nameCell === targetName) {
+            // Name matched within the correct day — confirm time if available
+            if (!targetTime || !timeCell || timeCell === targetTime) {
+              sheetRow = candidateRow;
+              console.log(`[sheets] Found stop "${targetName}" via fresh sheet search: day ${dayId}, row ${sheetRow}`);
+              break;
+            }
+          }
+        }
+
+        // If name match failed (e.g. Claude paraphrased it), fall back to positional
+        // match within this day: use stopIdx among this day's fresh rows
+        if (!sheetRow && freshDayEntry.stops[stopIdx] !== undefined) {
+          sheetRow = freshDayEntry.stops[stopIdx];
+          console.log(`[sheets] Name not found — using positional match within day ${dayId}: row ${sheetRow}`);
+        }
+      }
+
+      if (!sheetRow) console.warn('[delete] Stop not found in fresh sheet for day', dayId, '— falling back');
+    }
+  } catch(e) {
+    console.warn('[delete] Fresh sheet fetch failed, using fallback:', e.message);
+  }
+
+  // ── Step 2: Fallback to _sheetRow property, then rowMap index ──
+  if (!sheetRow) {
+    sheetRow = stop?._sheetRow ?? rm?.stops[stopIdx];
+  }
+  if (!sheetRow) {
+    console.warn('[delete] Could not determine sheet row — aborting');
+    return;
+  }
+
+  // ── Step 3: Delete the row ──
   const sheetId = itinerarySheetId !== null ? itinerarySheetId : 0;
   const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
@@ -1678,13 +1783,21 @@ async function deleteStopFromSheet(dayId, stopIdx) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || `deleteDimension failed (${res.status})`);
   }
-  // Update rowMap: remove the entry and shift all row numbers > deleted row down by 1
+
+  // ── Step 4: Update in-memory rowMap + _sheetRow on remaining stops ──
   Object.keys(rowMap).forEach(dId => {
     const dm = rowMap[dId];
     if (dm.headerRow > sheetRow) dm.headerRow--;
     dm.stops = dm.stops.map(r => r > sheetRow ? r - 1 : r);
   });
-  rowMap[dayId].stops.splice(stopIdx, 1);
+  if (rm) rm.stops.splice(stopIdx, 1);
+  if (tripData?.days) {
+    tripData.days.forEach(d => {
+      (d.stops || []).forEach(s => {
+        if (s._sheetRow !== undefined && s._sheetRow > sheetRow) s._sheetRow--;
+      });
+    });
+  }
   console.log('[sheets] ✓ Stop deleted from sheet row', sheetRow);
 }
 
