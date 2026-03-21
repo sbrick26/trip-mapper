@@ -419,14 +419,18 @@ async function generate() {
   try {
     step('ls1','active'); setMsg('Fetching your Google Sheet...');
     const csv = await fetchSheet();
+    console.log('[generate] Sheet tabs received:', Object.keys(csv).filter(k=>csv[k].length>0));
     step('ls1','done');
 
     step('ls2','active'); setMsg('Claude is reading your itinerary...');
     const parsed = await claudeParse(csv);
+    console.log('[generate] Parsed trip:', parsed.tripName, '—', parsed.days?.length, 'days');
     step('ls2','done');
 
     step('ls3','active'); setMsg('Geocoding all locations...');
     const geocoded = await claudeGeocode(parsed);
+    const totalWithCoords = geocoded.days?.reduce((n,d) => n + (d.stops||[]).filter(s=>s.lat&&s.lng).length, 0) || 0;
+    console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
     tripData = geocoded;
 
@@ -452,49 +456,89 @@ async function generate() {
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 // ─── Fetch sheet (server-side via Cloudflare Worker sheet proxy) ──
-// Since the worker is ours, we add a /sheet path that fetches Google Sheets
-// Actually: Google Sheets export is accessible server-side. We'll fetch it
-// directly through the worker with a simple query param.
-async function fetchSheet() {
-  const tabs = ['Itinerary','Transportation','Hotels','Flights'];
-  const results = {};
+async function fetchSheetTab(tab) {
+  // Try multiple Google Sheets URL formats for robustness
+  const urls = [
+    // Format 1: export endpoint (most common, follows redirects)
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(tab)}`,
+    // Format 2: gviz endpoint (direct CSV, no redirect)
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`,
+  ];
 
-  for (const tab of tabs) {
-    const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
-    // Use worker as pass-through for CORS
-    const res = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(sheetUrl), {
-      method: 'GET',
-      headers: { 'X-Api-Key': apiKey }
-    });
-    if (res.ok) {
-      const t = await res.text();
-      results[tab] = t.startsWith('<!') ? '' : t;
-    } else {
-      results[tab] = '';
-    }
-  }
-
-  if (!results['Itinerary'] || results['Itinerary'].length < 30) {
-    // Try fallback: first sheet (no tab name specified)
-    const fallbackUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`;
-    const fbRes = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(fallbackUrl));
-    if (fbRes.ok) {
-      const t = await fbRes.text();
-      if (!t.startsWith('<!') && t.length >= 30) {
-        results['Itinerary'] = t;
+  for (const sheetUrl of urls) {
+    try {
+      const res = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(sheetUrl));
+      if (!res.ok) continue;
+      let t = await res.text();
+      // Skip HTML error pages
+      if (t.startsWith('<!') || t.startsWith('<HTML')) continue;
+      // Strip gviz callback wrapper if present (google.visualization.Query.setResponse(...))
+      if (t.startsWith('google.visualization')) {
+        const m = t.match(/\{[\s\S]*\}/);
+        if (m) { try { const j = JSON.parse(m[0]); /* gviz JSON, not CSV */ continue; } catch(e){} }
       }
+      t = t.trim();
+      if (t.length > 20) {
+        console.log(`[fetchSheet] ✓ Got "${tab}" tab (${t.length} chars) via ${sheetUrl.includes('gviz') ? 'gviz' : 'export'}`);
+        return t;
+      }
+    } catch(e) {
+      console.warn(`[fetchSheet] Failed "${tab}" with ${sheetUrl}:`, e.message);
     }
   }
-  if (!results['Itinerary'] || results['Itinerary'].length < 30) {
+  return '';
+}
+
+async function fetchSheet() {
+  // Fetch Itinerary tab (required)
+  let itinerary = await fetchSheetTab('Itinerary');
+
+  // If named tab failed, try fetching the default/first sheet
+  if (!itinerary || itinerary.length < 30) {
+    console.warn('[fetchSheet] Named "Itinerary" tab failed, trying default first sheet...');
+    const fallbackUrls = [
+      `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv`,
+      `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`,
+    ];
+    for (const url of fallbackUrls) {
+      try {
+        const res = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(url));
+        if (!res.ok) continue;
+        const t = await res.text();
+        if (!t.startsWith('<!') && !t.startsWith('<HTML') && t.trim().length >= 30) {
+          itinerary = t.trim();
+          console.log(`[fetchSheet] ✓ Got first sheet as fallback (${itinerary.length} chars)`);
+          break;
+        }
+      } catch(e) { /* try next */ }
+    }
+  }
+
+  if (!itinerary || itinerary.length < 30) {
     throw new Error(
       'Could not read the Google Sheet.\n\n' +
       'Check:\n' +
       '1. Sharing → "Anyone with the link" → Viewer\n' +
-      '2. The tab is named exactly "Itinerary" (case-sensitive)\n' +
-      '3. WORKER_URL is set to your deployed Cloudflare Worker'
+      '2. Sheet ID is correct: ' + SHEET_ID + '\n' +
+      '3. WORKER_URL is responding: ' + WORKER_URL
     );
   }
-  return results;
+
+  console.log('[fetchSheet] Itinerary CSV preview:', itinerary.slice(0, 300));
+
+  // Fetch optional tabs (non-blocking)
+  const [transportation, hotels, flights] = await Promise.all([
+    fetchSheetTab('Transportation'),
+    fetchSheetTab('Hotels'),
+    fetchSheetTab('Flights'),
+  ]);
+
+  return {
+    Itinerary: itinerary,
+    Transportation: transportation,
+    Hotels: hotels,
+    Flights: flights,
+  };
 }
 
 // ─── Claude: parse CSV to structured itinerary ────────────────────
@@ -518,91 +562,151 @@ async function claudeCall(messages, maxTokens = 6000) {
 }
 
 async function claudeParse(csv) {
-  const prompt = `Parse this travel itinerary from Google Sheets CSV data into JSON.
+  const prompt = `You are parsing a travel itinerary CSV into structured JSON for a map app.
 
-=== ITINERARY ===
+The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
+- Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
+- Rows with a time (like "12:40 PM", "Morning", "Afternoon") are STOPS within that day.
+- The Location column tells you which city (seoul, tokyo, fuji, kyoto, osaka, nara, or transit).
+- The Address column has specific addresses when available.
+- The Notes column has extra details, tips, and descriptions.
+- The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
+
+=== ITINERARY CSV ===
 ${(csv['Itinerary']||'').slice(0,7000)}
 
-=== TRANSPORTATION ===
-${(csv['Transportation']||'').slice(0,2000)}
+${(csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'').slice(0,2000) : ''}
+${(csv['Hotels']||'').length > 30 ? '=== HOTELS ===\n' + (csv['Hotels']||'').slice(0,2000) : ''}
+${(csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'').slice(0,1500) : ''}
 
-=== HOTELS ===
-${(csv['Hotels']||'').slice(0,2000)}
+CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
 
-=== FLIGHTS ===
-${(csv['Flights']||'').slice(0,1500)}
-
-Return ONLY a raw JSON object (no markdown, no explanation, start with {):
 {
-  "tripName": "string",
-  "dateRange": "string",
-  "cities": ["city1", "city2"],
+  "tripName": "Japan 2026",
+  "dateRange": "Mar 25 – Apr 10",
+  "cities": ["seoul","tokyo","fuji","kyoto","osaka","nara"],
   "days": [
     {
       "id": 1,
       "date": "Wed, Mar 25",
-      "title": "Short title",
-      "city": "tokyo",
+      "title": "Short descriptive title for the day",
+      "city": "transit",
       "transport": null,
       "stops": [
         {
-          "time": "2:00 PM",
-          "name": "Place Name",
-          "detail": "Address, notes, phone",
-          "emoji": "⛩️",
-          "geoQuery": "Senso-ji Temple Asakusa Tokyo Japan"
+          "time": "12:40 PM",
+          "name": "Leave SFO",
+          "detail": "Flight to Tokyo via Seoul",
+          "emoji": "✈️",
+          "geoQuery": "San Francisco International Airport SFO California USA"
         }
       ]
     }
   ]
 }
 
-Rules:
-- city: lowercase slug (seoul/tokyo/fuji/kyoto/osaka/nara/transit)
-- transport: null OR { "icon":"🚄", "route":"A→B", "detail":"times, cost, duration" }
-- geoQuery: specific enough to geocode accurately, always include city+country
-- emoji: relevant (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🏖️)
-- detail: include address and phone if available, keep newlines as \\n`;
+RULES:
+- "city": must be one of: seoul, tokyo, fuji, kyoto, osaka, nara, transit (lowercase)
+- "transport": null OR {"icon":"🚄","route":"A → B","detail":"departure time, duration, cost if known"}
+  Use this for inter-city travel days (flights, shinkansen, buses between cities)
+- "geoQuery": a specific search string for geocoding. Include the landmark/place name + neighborhood + city + country.
+  Examples: "Meiji Shrine Shibuya Tokyo Japan", "Gwangjang Market Seoul South Korea", "SFO Airport San Francisco USA"
+  NEVER leave geoQuery empty — every stop needs one for the map.
+- "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
+- "detail": combine Address + Notes columns. Use \\n for line breaks.
+- Include ALL stops from the CSV. Do not skip any rows that have an Activity.
+- Number days sequentially starting at 1.`;
 
   const text = await claudeCall([{ role:'user', content:prompt }], 8000);
-  return JSON.parse(text);
+  console.log('[claudeParse] Raw response length:', text.length);
+  console.log('[claudeParse] First 200 chars:', text.slice(0, 200));
+  try {
+    const parsed = JSON.parse(text);
+    console.log('[claudeParse] ✓ Parsed', parsed.days?.length, 'days,', parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
+    return parsed;
+  } catch(e) {
+    console.error('[claudeParse] JSON parse failed. Raw text:', text.slice(0, 500));
+    throw new Error('Claude returned invalid JSON. Check console for details.');
+  }
 }
 
 // ─── Claude: geocode all stops ────────────────────────────────────
 async function claudeGeocode(data) {
-  const queries = [];
+  // Collect unique geoQueries
+  const uniqueQueries = [];
+  const queryMap = {}; // geoQuery string → index in uniqueQueries
   data.days.forEach(day => {
-    day.stops.forEach(stop => {
-      if (stop.geoQuery && !queries.find(q=>q.q===stop.geoQuery)) {
-        queries.push({ q:stop.geoQuery, ref:stop });
+    (day.stops||[]).forEach(stop => {
+      if (stop.geoQuery && !(stop.geoQuery in queryMap)) {
+        queryMap[stop.geoQuery] = uniqueQueries.length;
+        uniqueQueries.push(stop.geoQuery);
       }
     });
   });
 
-  const list = queries.map((q,i)=>`${i}: ${q.q}`).join('\n');
+  if (!uniqueQueries.length) {
+    console.warn('[geocode] No geoQueries found in parsed data!');
+    return data;
+  }
 
-  const prompt = `You are a geocoding service. Return accurate GPS coordinates for each location.
-CRITICAL RULES:
-- Respond with ONLY a raw JSON array, no markdown, no explanation
-- Start your response with [ and end with ]
-- Never return 0,0 — use real coordinates for every location
-- If you are unsure, use the best-known coordinates for that landmark/city
+  const list = uniqueQueries.map((q,i)=>`${i}: ${q}`).join('\n');
+  console.log(`[geocode] Geocoding ${uniqueQueries.length} unique locations...`);
+
+  const prompt = `You are a geocoding service. Return accurate GPS coordinates for each numbered location below.
+
+RULES:
+- Respond with ONLY a JSON array. No markdown, no explanation.
+- Start with [ and end with ]
+- Every entry MUST have real, accurate lat/lng. Never use 0,0.
+- Use well-known coordinates for famous landmarks.
 
 ${list}
 
-Example format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]`;
+Return format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]
+Return one entry per location. Include ALL ${uniqueQueries.length} locations.`;
 
-  const raw = await claudeCall([{ role:'user', content:prompt }], 3000);
-  // Handle if Claude wraps in object like {"coords":[...]}
-  const coords = JSON.parse(raw.includes('[') ? raw.slice(raw.indexOf('['), raw.lastIndexOf(']')+1) : raw);
+  const raw = await claudeCall([{ role:'user', content:prompt }], 4000);
+  console.log('[geocode] Raw response length:', raw.length);
 
+  // Parse — handle potential wrapper
+  let coords;
+  try {
+    const jsonStr = raw.includes('[') ? raw.slice(raw.indexOf('['), raw.lastIndexOf(']')+1) : raw;
+    coords = JSON.parse(jsonStr);
+  } catch(e) {
+    console.error('[geocode] JSON parse failed. Raw:', raw.slice(0,500));
+    throw new Error('Geocoding returned invalid JSON. Check console.');
+  }
+
+  // Build a lookup: index → {lat, lng}
+  const coordMap = {};
   coords.forEach(c => {
-    if (queries[c.i]) {
-      queries[c.i].ref.lat = c.lat;
-      queries[c.i].ref.lng = c.lng;
+    if (c && typeof c.lat === 'number' && typeof c.lng === 'number' && c.lat !== 0 && c.lng !== 0) {
+      coordMap[c.i] = { lat: c.lat, lng: c.lng };
     }
   });
 
+  console.log(`[geocode] Got coordinates for ${Object.keys(coordMap).length}/${uniqueQueries.length} locations`);
+
+  // Apply coordinates to ALL stops (not just the first one with that query)
+  let applied = 0, missing = 0;
+  data.days.forEach(day => {
+    (day.stops||[]).forEach(stop => {
+      if (stop.geoQuery && stop.geoQuery in queryMap) {
+        const idx = queryMap[stop.geoQuery];
+        if (coordMap[idx]) {
+          stop.lat = coordMap[idx].lat;
+          stop.lng = coordMap[idx].lng;
+          applied++;
+        } else {
+          console.warn('[geocode] Missing coords for:', stop.geoQuery);
+          missing++;
+        }
+      }
+    });
+  });
+
+  console.log(`[geocode] ✓ Applied coords to ${applied} stops, ${missing} missing`);
   return data;
 }
 
