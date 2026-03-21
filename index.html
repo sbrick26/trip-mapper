@@ -817,13 +817,27 @@ function annotateStopsWithSheetRows() {
   });
 }
 
-// Ensure every day has a `cities` array (backward compat for cached data without it)
+// Build `cities` array for every day by scanning stop geoQueries for known city names.
+// This handles cached data that lacks `cities`, and keeps the array up-to-date after add/delete.
 function normalizeCities() {
   if (!tripData?.days) return;
+  const knownCities = Object.keys(CITY_COLORS).filter(c => c !== 'transit');
   tripData.days.forEach(day => {
-    if (!day.cities || !Array.isArray(day.cities) || day.cities.length === 0) {
-      day.cities = day.city ? [day.city] : ['transit'];
+    const found = new Set();
+    // Scan each stop's geoQuery for city name mentions
+    (day.stops || []).forEach(stop => {
+      const q = (stop.geoQuery || '').toLowerCase();
+      knownCities.forEach(city => {
+        if (q.includes(city)) found.add(city);
+      });
+    });
+    // Also include the primary city tag if it's a real city
+    if (day.city && day.city !== 'transit') found.add(day.city);
+    // If Claude already provided a cities array, merge those in too
+    if (Array.isArray(day.cities)) {
+      day.cities.forEach(c => { if (c !== 'transit') found.add(c); });
     }
+    day.cities = found.size > 0 ? [...found] : [day.city || 'transit'];
   });
 }
 
@@ -1683,6 +1697,7 @@ async function submitAddStop() {
 
     // Insert into in-memory data
     day.stops.splice(insertAt, 0, stop);
+    normalizeCities(); // refresh cities array for this day
 
     // Rebuild sidebar timeline for this day only
     rebuildDaySidebar(addPanelDayId);
@@ -1861,6 +1876,7 @@ async function deleteStop(dayId, stopIdx) {
   const stopName = stop?.name || 'this stop';
   if (!confirm(`Remove "${stopName}" from the itinerary?`)) return;
   day.stops.splice(stopIdx, 1);
+  normalizeCities(); // refresh cities array after removal
   rebuildDaySidebar(dayId);
   renderMarkers(tripData.days);
   try {
