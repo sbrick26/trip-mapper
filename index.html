@@ -460,7 +460,7 @@ async function fetchSheet() {
   const results = {};
 
   for (const tab of tabs) {
-    const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&sheet=${encodeURIComponent(tab)}`;
+    const sheetUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
     // Use worker as pass-through for CORS
     const res = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(sheetUrl), {
       method: 'GET',
@@ -475,10 +475,23 @@ async function fetchSheet() {
   }
 
   if (!results['Itinerary'] || results['Itinerary'].length < 30) {
+    // Try fallback: first sheet (no tab name specified)
+    const fallbackUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv`;
+    const fbRes = await fetch(WORKER_URL + '?fetch=' + encodeURIComponent(fallbackUrl));
+    if (fbRes.ok) {
+      const t = await fbRes.text();
+      if (!t.startsWith('<!') && t.length >= 30) {
+        results['Itinerary'] = t;
+      }
+    }
+  }
+  if (!results['Itinerary'] || results['Itinerary'].length < 30) {
     throw new Error(
-      'Could not read the Itinerary sheet.\n' +
-      'Make sure the sheet sharing is set to "Anyone with the link → Viewer".\n' +
-      'Also check your Cloudflare Worker is deployed and WORKER_URL is correct.'
+      'Could not read the Google Sheet.\n\n' +
+      'Check:\n' +
+      '1. Sharing → "Anyone with the link" → Viewer\n' +
+      '2. The tab is named exactly "Itinerary" (case-sensitive)\n' +
+      '3. WORKER_URL is set to your deployed Cloudflare Worker'
     );
   }
   return results;
@@ -490,7 +503,7 @@ async function claudeCall(messages, maxTokens = 6000) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: maxTokens,
       messages
     })
@@ -568,15 +581,20 @@ async function claudeGeocode(data) {
 
   const list = queries.map((q,i)=>`${i}: ${q.q}`).join('\n');
 
-  const prompt = `Return GPS coordinates for these locations as a JSON array.
-CRITICAL: Start your response with [ and end with ]. No explanation, no markdown.
+  const prompt = `You are a geocoding service. Return accurate GPS coordinates for each location.
+CRITICAL RULES:
+- Respond with ONLY a raw JSON array, no markdown, no explanation
+- Start your response with [ and end with ]
+- Never return 0,0 — use real coordinates for every location
+- If you are unsure, use the best-known coordinates for that landmark/city
 
 ${list}
 
-Format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]`;
+Example format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]`;
 
-  const text = await claudeCall([{ role:'user', content:prompt }], 3000);
-  const coords = JSON.parse(text);
+  const raw = await claudeCall([{ role:'user', content:prompt }], 3000);
+  // Handle if Claude wraps in object like {"coords":[...]}
+  const coords = JSON.parse(raw.includes('[') ? raw.slice(raw.indexOf('['), raw.lastIndexOf(']')+1) : raw);
 
   coords.forEach(c => {
     if (queries[c.i]) {
@@ -803,7 +821,7 @@ function renderMarkers(days) {
 
   days.forEach(day => {
     const c = col(day.city);
-    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&s.lat>0).forEach((stop,i)=>{
+    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180).forEach((stop,i)=>{
       const prev = i>0 ? day.stops[i-1] : null;
       const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
       m.bindPopup(popupContent(stop,day,prev));
