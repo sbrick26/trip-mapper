@@ -1,3 +1,7 @@
 name = "trip-mapper"
 main = "worker.js"
 compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "TRIP_CACHE"
+id = "c223597e9b3c4cf69a98bc7da026f699"
