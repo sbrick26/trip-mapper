@@ -6,6 +6,7 @@
 <title>Japan 2026 🌸</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet"/>
 <style>
 /* ─────────────────── VARIABLES ─────────────────── */
@@ -375,7 +376,139 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .day-hd { padding:12px 14px; }
   .act, .pu-btn { padding:5px 10px; font-size:11px; }
   .day-route-btn { padding:10px; font-size:12px; }
+
+  /* Hide google-btn label on mobile (icon only) */
+  .gb-text { display:none; }
+  #add-panel { max-height:92vh; }
 }
+
+/* ─────────────────── GOOGLE CONNECT BUTTON ─────────────────── */
+#google-btn {
+  padding:5px 11px; background:transparent; border:1px solid var(--border);
+  border-radius:8px; color:var(--muted); font-size:11px; cursor:pointer;
+  font-family:inherit; transition:all .15s; flex-shrink:0;
+  display:flex; align-items:center; gap:4px;
+}
+#google-btn:hover { border-color:#5be8a044; color:#5be8a0; }
+
+/* ─────────────────── ADD STOP BUTTON (day header) ─────────────────── */
+.add-stop-btn {
+  padding:3px 7px; background:transparent; border:1px solid var(--border);
+  border-radius:6px; color:var(--muted); font-size:14px; cursor:pointer;
+  font-family:inherit; transition:all .12s; flex-shrink:0;
+  line-height:1; -webkit-tap-highlight-color:transparent;
+}
+.add-stop-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ─────────────────── ADD PLACE PANEL ─────────────────── */
+#add-panel {
+  position:fixed; bottom:0; left:0; right:0; z-index:300;
+  background:rgba(13,12,11,.98); border-top:1px solid var(--border);
+  border-radius:18px 18px 0 0; max-height:85vh; overflow-y:auto;
+  transform:translateY(100%); transition:transform .28s cubic-bezier(.4,0,.2,1);
+  backdrop-filter:blur(16px);
+}
+#add-panel.open { transform:translateY(0); }
+
+.ap-header {
+  display:flex; align-items:center; gap:10px;
+  padding:16px 18px 12px; border-bottom:1px solid var(--border);
+  position:sticky; top:0; background:rgba(13,12,11,.98); z-index:1;
+}
+.ap-title { font-size:14px; font-weight:600; flex:1; }
+.ap-title span { font-size:11px; color:var(--muted); font-weight:400; }
+.ap-close {
+  width:28px; height:28px; border-radius:50%; border:1px solid var(--border);
+  background:transparent; color:var(--muted); font-size:13px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; font-family:inherit;
+  transition:all .12s; flex-shrink:0; -webkit-tap-highlight-color:transparent;
+}
+.ap-close:hover { border-color:var(--text); color:var(--text); }
+
+.ap-section { padding:14px 18px; border-bottom:1px solid var(--border); }
+.ap-section-label {
+  font-size:10px; font-weight:600; color:var(--muted); text-transform:uppercase;
+  letter-spacing:.8px; margin-bottom:8px;
+}
+
+#ap-search {
+  width:100%; background:var(--bg); border:1px solid var(--border);
+  border-radius:9px; padding:9px 12px; color:var(--text);
+  font-size:13px; font-family:inherit; outline:none; transition:border-color .15s;
+}
+#ap-search:focus { border-color:var(--accent); }
+#ap-search::placeholder { color:#302c28; }
+
+#ap-results { margin-top:8px; display:flex; flex-direction:column; gap:4px; }
+.ap-result {
+  text-align:left; padding:8px 11px; background:var(--s2); border:1px solid var(--border);
+  border-radius:7px; color:var(--text); font-size:12px; cursor:pointer; font-family:inherit;
+  transition:all .12s; line-height:1.4;
+}
+.ap-result:hover { border-color:var(--accent); background:var(--s3); }
+.ap-searching, .ap-no-results { font-size:12px; color:var(--muted); padding:6px 2px; }
+
+#ap-selected {
+  margin-top:8px; padding:8px 11px;
+  background:rgba(200,168,122,.08); border:1px solid rgba(200,168,122,.3);
+  border-radius:7px; font-size:12px; color:var(--accent); line-height:1.4;
+}
+.ap-map-btn {
+  margin-top:8px; padding:6px 12px; background:transparent;
+  border:1px solid #5bbfe830; border-radius:7px; color:#5bbfe8;
+  font-size:11px; cursor:pointer; font-family:inherit; transition:all .12s;
+}
+.ap-map-btn:hover, .ap-map-btn.active { background:#5bbfe812; border-color:#5bbfe8; }
+.ap-map-hint { font-size:11px; color:#5bbfe8; margin-top:6px; display:none; }
+.ap-map-hint.show { display:block; }
+
+.ap-fields {
+  padding:14px 18px; display:grid; grid-template-columns:1fr 1fr; gap:12px;
+  border-bottom:1px solid var(--border);
+}
+.ap-field-full { grid-column:1/-1; }
+.ap-field label {
+  display:block; font-size:10px; font-weight:600; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px;
+}
+.ap-field input, .ap-field select, .ap-field textarea {
+  width:100%; background:var(--bg); border:1px solid var(--border);
+  border-radius:8px; padding:8px 11px; color:var(--text);
+  font-size:12px; font-family:inherit; outline:none; transition:border-color .15s;
+}
+.ap-field input:focus, .ap-field select:focus, .ap-field textarea:focus { border-color:var(--accent); }
+.ap-field select { appearance:none; -webkit-appearance:none; cursor:pointer; }
+.ap-field textarea { resize:none; }
+.ap-field input::placeholder, .ap-field textarea::placeholder { color:#302c28; }
+
+#ap-emojis { display:flex; flex-wrap:wrap; gap:5px; }
+.ap-emoji {
+  width:34px; height:34px; border:1px solid var(--border); border-radius:7px;
+  background:transparent; font-size:16px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .12s; line-height:1; padding:0; flex-shrink:0;
+  -webkit-tap-highlight-color:transparent;
+}
+.ap-emoji.on { border-color:var(--accent); background:rgba(200,168,122,.12); }
+.ap-emoji:hover { border-color:var(--muted); }
+
+.ap-actions {
+  display:flex; gap:10px; padding:14px 18px;
+  position:sticky; bottom:0; background:rgba(13,12,11,.98); z-index:1;
+}
+.ap-cancel {
+  flex:1; padding:10px; background:transparent; border:1px solid var(--border);
+  border-radius:9px; color:var(--muted); font-size:13px; cursor:pointer;
+  font-family:inherit; transition:all .12s;
+}
+.ap-cancel:hover { border-color:var(--text); color:var(--text); }
+.ap-submit {
+  flex:2; padding:10px; background:var(--accent); border:none;
+  border-radius:9px; color:#0d0c0b; font-size:13px; font-weight:700;
+  cursor:pointer; font-family:inherit; transition:opacity .15s;
+}
+.ap-submit:hover { opacity:.88; }
+.ap-submit:disabled { opacity:.4; cursor:not-allowed; }
 </style>
 </head>
 <body>
@@ -417,6 +550,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   <div id="trip-name">🌸 <em>Travel Map</em></div>
   <div id="trip-dates"></div>
   <div class="city-filters" id="filters"></div>
+  <button id="google-btn" onclick="connectGoogle()">🔗 <span class="gb-text">Connect Google</span></button>
   <button id="refresh-btn" onclick="doRefresh()">↺ Refresh</button>
 </div>
 
@@ -428,12 +562,56 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   </div>
 </div>
 
+<!-- ═══ ADD PLACE PANEL ══════════════════════════════════════════════ -->
+<div id="add-panel">
+  <div class="ap-header">
+    <div class="ap-title">＋ Add Place <span id="ap-day-label"></span></div>
+    <button class="ap-close" onclick="closeAddPanel()">✕</button>
+  </div>
+
+  <div class="ap-section">
+    <div class="ap-section-label">Search for a place</div>
+    <input type="text" id="ap-search" placeholder="e.g. Fushimi Inari Shrine…" autocomplete="off" oninput="onAddSearch()"/>
+    <div id="ap-results"></div>
+    <div id="ap-selected" style="display:none"></div>
+    <button class="ap-map-btn" id="ap-map-btn" onclick="toggleMapPinMode()">📍 Pick on map</button>
+    <div class="ap-map-hint" id="ap-map-hint">Tap anywhere on the map to drop a pin</div>
+  </div>
+
+  <div class="ap-fields">
+    <div class="ap-field">
+      <label>Insert after</label>
+      <select id="ap-slot"></select>
+    </div>
+    <div class="ap-field">
+      <label>Time</label>
+      <input type="text" id="ap-time" placeholder="e.g. 2:00 PM"/>
+    </div>
+    <div class="ap-field ap-field-full">
+      <label>Emoji</label>
+      <div id="ap-emojis"></div>
+    </div>
+    <div class="ap-field ap-field-full">
+      <label>Notes (optional)</label>
+      <textarea id="ap-notes" rows="2" placeholder="Address, tips, reservation info…"></textarea>
+    </div>
+  </div>
+
+  <div class="ap-actions">
+    <button class="ap-cancel" onclick="closeAddPanel()">Cancel</button>
+    <button class="ap-submit" id="ap-submit" onclick="submitAddStop()">Add to Itinerary</button>
+  </div>
+</div>
+
 <script>
 // ═══════════════════════════════════════════════════════════════════
 //  CONFIG — edit these two lines before pushing to GitHub
 // ═══════════════════════════════════════════════════════════════════
 const SHEET_ID    = '12ugZ8N3sgjBNjszldQ9cUSHb_EE3jP_F11hrWOId6RA';
 const WORKER_URL  = 'https://trip-mapper.swayambarik.workers.dev'; // ← paste your Cloudflare Worker URL
+// Google OAuth Client ID — create one at console.cloud.google.com → APIs & Services → Credentials
+// Enable "Google Sheets API", create an OAuth 2.0 Web Client ID, add your domain to Authorized JS origins
+const GOOGLE_CLIENT_ID = '950178692511-8b3kg03lbjcqethq4d2tq0ii147mls3f.apps.googleusercontent.com'; // ← paste your OAuth Client ID here (e.g. "123456-abc.apps.googleusercontent.com")
 // ═══════════════════════════════════════════════════════════════════
 
 const CITY_COLORS = {
@@ -448,6 +626,22 @@ let leafletMap = null;
 let layerGroup = null;
 let activeDay = null;
 let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
+
+// ─── Sheet sync state ─────────────────────────────────────────────
+let rawCSVData = null;      // full {Itinerary, Transportation, Hotels, Flights} object
+let rowMap = {};            // dayId → { headerRow: N, stops: [rowNum, ...] } (1-indexed)
+let gToken = null;          // Google OAuth access token
+let itinerarySheetId = null; // numeric sheetId for Itinerary tab (from Sheets API metadata)
+
+// ─── Add-panel state ──────────────────────────────────────────────
+let addPanelDayId = null;
+let addPanelLat = null;
+let addPanelLng = null;
+let addPanelGeoQuery = null;
+let addPanelPlaceName = null;
+let addPanelSelectedEmoji = '📍';
+let addPanelSearchTimeout = null;
+let addPanelMapMode = false;
 
 // ─── Setup ────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
@@ -511,12 +705,52 @@ function hashCSV(csv) {
   return (h >>> 0).toString(36);
 }
 
+// ─── Build row map: CSV line # for each stop (for sheet write-back) ─
+function buildRowMap(csvText) {
+  if (!csvText) return {};
+  const lines = csvText.split('\n');
+  const result = {};
+  let dayId = 0;
+  const weekdayRe = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/i;
+  const timeRe    = /\b\d{1,2}:\d{2}|\b(morning|afternoon|evening|night)\b/i;
+
+  for (let i = 1; i < lines.length; i++) { // i=0 is header row
+    const line = lines[i];
+    if (!line.trim()) continue;
+
+    // Parse first cell (handle CSV quoting)
+    let firstCell = '';
+    if (line.startsWith('"')) {
+      const close = line.indexOf('"', 1);
+      firstCell = close > 0 ? line.slice(1, close) : line;
+    } else {
+      firstCell = line.split(',')[0];
+    }
+    firstCell = firstCell.trim();
+    if (!firstCell) continue;
+
+    const isDay = weekdayRe.test(firstCell) && !timeRe.test(firstCell);
+    if (isDay) {
+      dayId++;
+      result[dayId] = { headerRow: i + 1, stops: [] }; // 1-indexed sheet row
+    } else if (dayId > 0) {
+      result[dayId].stops.push(i + 1); // 1-indexed sheet row
+    }
+  }
+  console.log('[rowMap] Built map for', Object.keys(result).length, 'days,',
+    Object.values(result).reduce((n, d) => n + d.stops.length, 0), 'stops');
+  return result;
+}
+
 // ─── Main generation pipeline ─────────────────────────────────────
 async function generate(force = false) {
   try {
     step('ls1','active'); setMsg('Fetching your Google Sheet...');
     const csv = await fetchSheet();
     console.log('[generate] Sheet tabs received:', Object.keys(csv).filter(k=>csv[k].length>0));
+    // Store CSV for rowMap and cache invalidation (needed even on cache hit)
+    rawCSVData = csv;
+    rowMap = buildRowMap(csv.Itinerary);
     step('ls1','done');
 
     // ── Cache check ──────────────────────────────────────────────
@@ -912,6 +1146,394 @@ function buildApp(data) {
   initMap(data.days);
 }
 
+// ─── Google OAuth (Sheets write access) ───────────────────────────
+function connectGoogle() {
+  if (!window.google?.accounts?.oauth2) {
+    alert('Google Identity Services not loaded yet. Please wait a moment and try again.');
+    return;
+  }
+  if (!GOOGLE_CLIENT_ID) {
+    alert('No GOOGLE_CLIENT_ID configured.\n\nAdd your OAuth Client ID to the GOOGLE_CLIENT_ID constant at the top of the script. See the comment there for setup instructions.');
+    return;
+  }
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    callback: async (resp) => {
+      if (resp.error) { console.error('[google] OAuth error:', resp); return; }
+      gToken = resp.access_token;
+      const btn = document.getElementById('google-btn');
+      btn.innerHTML = '✓ <span class="gb-text">Sheets Connected</span>';
+      btn.style.color = '#5be8a0';
+      btn.style.borderColor = 'rgba(91,232,160,.3)';
+      btn.onclick = null; // prevent re-auth
+      await fetchItinerarySheetId();
+    }
+  });
+  client.requestAccessToken();
+}
+
+async function fetchItinerarySheetId() {
+  try {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?fields=sheets(properties(sheetId,title))`,
+      { headers: { Authorization: `Bearer ${gToken}` } }
+    );
+    const data = await res.json();
+    const sheet = (data.sheets || []).find(s => s.properties.title === 'Itinerary');
+    itinerarySheetId = sheet ? sheet.properties.sheetId : 0;
+    console.log('[google] Itinerary sheetId:', itinerarySheetId);
+  } catch(e) {
+    itinerarySheetId = 0;
+    console.warn('[google] Could not fetch sheetId, defaulting to 0:', e.message);
+  }
+}
+
+// ─── Add Place panel ──────────────────────────────────────────────
+const AP_EMOJIS = ['📍','⛩️','🌸','🍜','🛍️','🎨','🏯','🎮','🏟️','🌅','🦌','🛶','🎋','🗻','🍣','🎵','🏨','🚶','🍻','🎭','🏪','🌊'];
+
+function openAddPanel(dayId) {
+  addPanelDayId = dayId;
+  addPanelLat = null; addPanelLng = null;
+  addPanelGeoQuery = null; addPanelPlaceName = null;
+  addPanelSelectedEmoji = '📍'; addPanelMapMode = false;
+
+  const day = tripData?.days.find(d => d.id === dayId);
+  if (!day) return;
+
+  document.getElementById('ap-day-label').textContent = `— Day ${day.id} · ${day.title}`;
+
+  // Build timeslot options
+  const slot = document.getElementById('ap-slot');
+  slot.innerHTML = '';
+  const stops = day.stops || [];
+  const addOpt = (val, label) => {
+    const o = document.createElement('option'); o.value = val; o.textContent = label;
+    slot.appendChild(o);
+  };
+  if (stops.length === 0) {
+    addOpt('-1', 'First stop of the day');
+  } else {
+    addOpt('-1', `↑ Before ${stops[0].emoji||''} ${stops[0].name}`);
+    stops.forEach((s, i) => addOpt(String(i), `After ${s.emoji||''} ${s.name}`));
+    slot.value = String(stops.length - 1); // default: after last stop
+  }
+
+  // Emoji picker
+  const ep = document.getElementById('ap-emojis');
+  ep.innerHTML = '';
+  AP_EMOJIS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.className = 'ap-emoji' + (emoji === '📍' ? ' on' : '');
+    btn.textContent = emoji;
+    btn.onclick = () => {
+      document.querySelectorAll('.ap-emoji').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      addPanelSelectedEmoji = emoji;
+    };
+    ep.appendChild(btn);
+  });
+
+  // Reset fields
+  document.getElementById('ap-search').value = '';
+  document.getElementById('ap-results').innerHTML = '';
+  document.getElementById('ap-selected').style.display = 'none';
+  document.getElementById('ap-notes').value = '';
+  document.getElementById('ap-time').value = '';
+  document.getElementById('ap-map-btn').classList.remove('active');
+  document.getElementById('ap-map-hint').classList.remove('show');
+  document.getElementById('ap-submit').disabled = false;
+  document.getElementById('ap-submit').textContent = 'Add to Itinerary';
+
+  document.getElementById('add-panel').classList.add('open');
+  setTimeout(() => document.getElementById('ap-search').focus(), 300);
+}
+
+function closeAddPanel() {
+  document.getElementById('add-panel').classList.remove('open');
+  if (addPanelMapMode) {
+    addPanelMapMode = false;
+    document.getElementById('ap-map-btn').classList.remove('active');
+    document.getElementById('ap-map-hint').classList.remove('show');
+  }
+}
+
+function toggleMapPinMode() {
+  addPanelMapMode = !addPanelMapMode;
+  document.getElementById('ap-map-btn').classList.toggle('active', addPanelMapMode);
+  document.getElementById('ap-map-hint').classList.toggle('show', addPanelMapMode);
+  if (addPanelMapMode) {
+    // Collapse sidebar on mobile so map is visible
+    if (window.innerWidth <= 768) {
+      document.getElementById('sidebar').classList.remove('sheet-open');
+    }
+  }
+}
+
+let addPanelSearchTimer = null;
+function onAddSearch() {
+  clearTimeout(addPanelSearchTimer);
+  const q = document.getElementById('ap-search').value.trim();
+  // Clear selected place if user edits search
+  addPanelLat = null; addPanelLng = null; addPanelGeoQuery = null;
+  document.getElementById('ap-selected').style.display = 'none';
+  if (q.length < 2) { document.getElementById('ap-results').innerHTML = ''; return; }
+  addPanelSearchTimer = setTimeout(() => searchPlaces(q), 380);
+}
+
+async function searchPlaces(query) {
+  const resultsDiv = document.getElementById('ap-results');
+  resultsDiv.innerHTML = '<div class="ap-searching">Searching…</div>';
+  try {
+    const res = await fetch(`${WORKER_URL}?geocode=${encodeURIComponent(query)}`);
+    const results = await res.json();
+    if (!Array.isArray(results) || !results.length) {
+      resultsDiv.innerHTML = '<div class="ap-no-results">No results — try a more specific name</div>';
+      return;
+    }
+    resultsDiv.innerHTML = '';
+    results.slice(0, 5).forEach(r => {
+      const btn = document.createElement('button');
+      btn.className = 'ap-result';
+      const parts = (r.display_name || '').split(',');
+      const short = parts.slice(0, 3).join(',');
+      btn.textContent = short;
+      btn.title = r.display_name;
+      btn.onclick = () => selectPlace(r, short);
+      resultsDiv.appendChild(btn);
+    });
+  } catch(e) {
+    resultsDiv.innerHTML = '<div class="ap-no-results">Search failed — check your connection</div>';
+  }
+}
+
+function selectPlace(result, displayName) {
+  addPanelLat = parseFloat(result.lat);
+  addPanelLng = parseFloat(result.lon);
+  addPanelGeoQuery = result.display_name || displayName;
+  addPanelPlaceName = result.name || displayName.split(',')[0].trim();
+
+  document.getElementById('ap-search').value = addPanelPlaceName;
+  document.getElementById('ap-results').innerHTML = '';
+  const sel = document.getElementById('ap-selected');
+  sel.style.display = 'block';
+  sel.textContent = `📍 ${displayName}`;
+}
+
+// ─── Submit: add stop in-memory + write to sheet ──────────────────
+async function submitAddStop() {
+  const day = tripData?.days.find(d => d.id === addPanelDayId);
+  if (!day) return;
+
+  const name = document.getElementById('ap-search').value.trim();
+  if (!name) { alert('Please search for and select a place first.'); return; }
+
+  const slotVal  = parseInt(document.getElementById('ap-slot').value); // insertAfterIdx (-1 = before first)
+  const time     = document.getElementById('ap-time').value.trim();
+  const notes    = document.getElementById('ap-notes').value.trim();
+  const insertAt = slotVal + 1; // array index for splice
+
+  const stop = {
+    name,
+    time: time || '',
+    detail: notes,
+    emoji: addPanelSelectedEmoji,
+    geoQuery: addPanelGeoQuery || name,
+    lat: addPanelLat,
+    lng: addPanelLng,
+  };
+
+  const btn = document.getElementById('ap-submit');
+  btn.disabled = true;
+  btn.textContent = 'Adding…';
+
+  try {
+    // Geocode via Claude if no coordinates (e.g. typed name without selecting a result)
+    if (!stop.lat || !stop.lng) {
+      btn.textContent = 'Geocoding…';
+      const fakeData = { days: [{ id: addPanelDayId, stops: [stop] }] };
+      await claudeGeocode(fakeData);
+      stop.lat = fakeData.days[0].stops[0].lat;
+      stop.lng = fakeData.days[0].stops[0].lng;
+    }
+
+    // Insert into in-memory data
+    day.stops.splice(insertAt, 0, stop);
+
+    // Rebuild sidebar timeline for this day only
+    rebuildDaySidebar(addPanelDayId);
+
+    // Re-render map (user is in single-day view when add panel is open)
+    renderDayMarkers(day);
+
+    // Write to Google Sheet (if connected)
+    if (gToken) {
+      btn.textContent = 'Syncing to Sheet…';
+      await writeStopToSheet(addPanelDayId, slotVal, stop, insertAt);
+      await invalidateCache();
+    }
+
+    closeAddPanel();
+  } catch(e) {
+    console.error('[addStop] Failed:', e);
+    alert('Failed to add stop: ' + (e.message || String(e)));
+    // Rollback in-memory change
+    const idx = day.stops.indexOf(stop);
+    if (idx !== -1) day.stops.splice(idx, 1);
+    btn.disabled = false;
+    btn.textContent = 'Add to Itinerary';
+  }
+}
+
+// ─── Targeted sidebar rebuild for one day ─────────────────────────
+function rebuildDaySidebar(dayId) {
+  const day = tripData?.days.find(d => d.id === dayId);
+  const el  = document.getElementById(`day-${dayId}`);
+  if (!el || !day) return;
+  const tl  = el.querySelector('.tl');
+  if (!tl) return;
+  tl.innerHTML = (day.stops || []).map((stop, i) => buildStopHTML(day, stop, i)).join('');
+}
+
+// ─── Per-stop HTML (extracted for reuse in buildSidebar + rebuildDaySidebar) ─
+function buildStopHTML(day, stop, i) {
+  const c    = col(day.city);
+  const prev = i > 0 ? day.stops[i - 1] : null;
+
+  let connHtml = '';
+  if (prev?.lat && prev?.lng && stop.lat && stop.lng) {
+    const d = km(prev.lat, prev.lng, stop.lat, stop.lng);
+    if (d < 80) {
+      const isWalk  = d < 1.5;
+      const mode    = isWalk ? 'walking' : 'transit';
+      const timeStr = isWalk ? walkLabel(d) : transitLabel(d);
+      const dirUrl  = gMapsDir(prev, stop, mode);
+      connHtml = `<div class="conn">
+        ${isWalk?'🚶':'🚃'} ${d<1?Math.round(d*1000)+'m':d.toFixed(1)+'km'} · ${timeStr}
+        <a href="${dirUrl}" target="_blank">${isWalk?'Walk directions':'Transit directions'} →</a>
+      </div>`;
+    }
+  }
+
+  let actsHtml = '';
+  if (stop.lat && stop.lng) {
+    const mUrl = gMapsPlace(stop);
+    actsHtml += `<a class="act" href="${mUrl}" target="_blank">📍 Open in Maps</a>`;
+    if (prev?.lat && prev?.lng) {
+      const d = km(prev.lat, prev.lng, stop.lat, stop.lng);
+      if (d < 80) {
+        const isWalk = d < 1.5;
+        const mode   = isWalk ? 'walking' : 'transit';
+        const dUrl   = gMapsDir(prev, stop, mode);
+        actsHtml += `<a class="act ${isWalk?'walk':'dir'}" href="${dUrl}" target="_blank">
+          ${isWalk?'🚶 Walk':'🚃 Transit'} from prev
+        </a>`;
+      }
+    }
+  }
+
+  const hasCoords = !!(stop.lat && stop.lng);
+  return `<div class="tl-stop${hasCoords?' tl-stop-link':''}" id="stop-${day.id}-${i}"
+      ${hasCoords ? `data-day-id="${day.id}" data-stop-idx="${i}" data-lat="${stop.lat}" data-lng="${stop.lng}"` : ''}>
+    <div class="tl-dot" style="background:${c}"></div>
+    ${connHtml}
+    <div class="stop-time">${stop.time||''}</div>
+    <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
+    <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
+    ${actsHtml ? `<div class="stop-acts">${actsHtml}</div>` : ''}
+  </div>`;
+}
+
+// ─── Google Sheets write-back ──────────────────────────────────────
+async function writeStopToSheet(dayId, insertAfterIdx, stop, insertAtArrayIdx) {
+  if (!gToken) return;
+  const day = tripData?.days.find(d => d.id === dayId);
+  const rm  = rowMap[dayId];
+  if (!rm) {
+    console.warn('[sheets] No rowMap for day', dayId, '— skipping write');
+    return;
+  }
+
+  // Determine which 1-indexed sheet row to insert at
+  let sheetRow;
+  if (insertAfterIdx < 0) {
+    sheetRow = rm.headerRow + 1; // first stop slot = row after day header
+  } else if (rm.stops[insertAfterIdx] !== undefined) {
+    sheetRow = rm.stops[insertAfterIdx] + 1;
+  } else {
+    // After all existing stops
+    sheetRow = (rm.stops[rm.stops.length - 1] || rm.headerRow) + 1;
+  }
+
+  const sheetId = itinerarySheetId !== null ? itinerarySheetId : 0;
+
+  // Step 1: Insert an empty row via batchUpdate insertDimension
+  const batchRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}:batchUpdate`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${gToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests: [{
+        insertDimension: {
+          range: { sheetId, dimension: 'ROWS', startIndex: sheetRow - 1, endIndex: sheetRow },
+          inheritFromBefore: false
+        }
+      }]})
+    }
+  );
+  if (!batchRes.ok) {
+    const err = await batchRes.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Sheet insertDimension failed (${batchRes.status})`);
+  }
+
+  // Step 2: Write data into the new empty row
+  const rowData = [stop.time||'', stop.name, '', day?.city||'', stop.detail||'', stop.geoQuery||stop.name];
+  const writeRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/Itinerary!A${sheetRow}:F${sheetRow}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${gToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: [rowData] })
+    }
+  );
+  if (!writeRes.ok) {
+    const err = await writeRes.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Sheet write failed (${writeRes.status})`);
+  }
+
+  // Step 3: Update rowMap to reflect the new row
+  shiftRowMap(dayId, insertAtArrayIdx, sheetRow);
+  console.log('[sheets] ✓ Stop written to sheet row', sheetRow);
+}
+
+function shiftRowMap(dayId, newStopArrayIdx, newRowNumber) {
+  // Shift all existing rows >= newRowNumber (they were pushed down by insertDimension)
+  Object.keys(rowMap).forEach(dId => {
+    const dm = rowMap[dId];
+    if (dm.headerRow >= newRowNumber) dm.headerRow++;
+    dm.stops = dm.stops.map(r => r >= newRowNumber ? r + 1 : r);
+  });
+  // Insert the new stop's row at the correct position in rowMap
+  if (rowMap[dayId]) {
+    rowMap[dayId].stops.splice(newStopArrayIdx, 0, newRowNumber);
+  }
+}
+
+async function invalidateCache() {
+  if (!rawCSVData) return;
+  const hash = hashCSV(rawCSVData);
+  try {
+    await fetch(`${WORKER_URL}/cache/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash })
+    });
+    console.log('[cache] Invalidated hash:', hash);
+  } catch(e) {
+    console.warn('[cache] Invalidation failed (non-fatal):', e.message);
+  }
+}
+
 // Scroll `el` to the top of `sheetBody` using getBoundingClientRect for accuracy
 function scrollToEl(el, sheetBody, offset = 6) {
   const bodyRect = sheetBody.getBoundingClientRect();
@@ -1023,57 +1645,8 @@ function buildSidebar(days, allDays) {
     const validStops = (day.stops||[]).filter(s=>s.lat&&s.lng);
     const routeUrl = gMapsDayRoute(validStops);
 
-    // Build timeline HTML
-    let timelineHtml = '';
-    (day.stops||[]).forEach((stop,i) => {
-      const prev = i>0 ? day.stops[i-1] : null;
-
-      // Connection info from previous stop
-      let connHtml = '';
-      if (prev?.lat && prev?.lng && stop.lat && stop.lng) {
-        const d = km(prev.lat,prev.lng,stop.lat,stop.lng);
-        if (d < 80) {
-          const isWalk   = d < 1.5;
-          const mode     = isWalk ? 'walking' : 'transit';
-          const timeStr  = isWalk ? walkLabel(d) : transitLabel(d);
-          const dirUrl   = gMapsDir(prev,stop,mode);
-          connHtml = `<div class="conn">
-            ${isWalk?'🚶':'🚃'} ${d<1?Math.round(d*1000)+'m':d.toFixed(1)+'km'} · ${timeStr}
-            <a href="${dirUrl}" target="_blank">${isWalk?'Walk directions':'Transit directions'} →</a>
-          </div>`;
-        }
-      }
-
-      // Action buttons
-      let actsHtml = '';
-      if (stop.lat && stop.lng) {
-        const mUrl = gMapsPlace(stop);
-        actsHtml += `<a class="act" href="${mUrl}" target="_blank">📍 Open in Maps</a>`;
-        if (prev?.lat && prev?.lng) {
-          const d = km(prev.lat,prev.lng,stop.lat,stop.lng);
-          if (d < 80) {
-            const isWalk = d < 1.5;
-            const mode = isWalk ? 'walking' : 'transit';
-            const dUrl = gMapsDir(prev,stop,mode);
-            actsHtml += `<a class="act ${isWalk?'walk':'dir'}" href="${dUrl}" target="_blank">
-              ${isWalk?'🚶 Walk':'🚃 Transit'} from prev
-            </a>`;
-          }
-        }
-      }
-
-      const hasCoords = !!(stop.lat && stop.lng);
-      timelineHtml += `
-        <div class="tl-stop${hasCoords?' tl-stop-link':''}" id="stop-${day.id}-${i}"
-          ${hasCoords ? `data-day-id="${day.id}" data-stop-idx="${i}" data-lat="${stop.lat}" data-lng="${stop.lng}"` : ''}>
-          <div class="tl-dot" style="background:${c}"></div>
-          ${connHtml}
-          <div class="stop-time">${stop.time||''}</div>
-          <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
-          <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
-          ${actsHtml ? `<div class="stop-acts">${actsHtml}</div>` : ''}
-        </div>`;
-    });
+    // Build timeline HTML using shared helper
+    const timelineHtml = (day.stops||[]).map((stop, i) => buildStopHTML(day, stop, i)).join('');
 
     const el = document.createElement('div');
     el.className = 'day';
@@ -1086,6 +1659,8 @@ function buildSidebar(days, allDays) {
           <div class="day-title">${day.title}</div>
         </div>
         <div class="day-badge" style="background:${c}20;color:${c}">${day.city||''}</div>
+        <button class="add-stop-btn" title="Add a place to this day"
+          onclick="event.stopPropagation();openAddPanel(${day.id})">＋</button>
         <div class="chev">▶</div>
       </div>
       <div class="day-body">
@@ -1180,7 +1755,28 @@ function initMap(days) {
     }).addTo(leafletMap);
     layerGroup = L.layerGroup().addTo(leafletMap);
     // On mobile: tapping the map collapses the bottom sheet
-    leafletMap.on('click', () => {
+    // Also handles "pick on map" pin mode for add-panel
+    leafletMap.on('click', (e) => {
+      if (addPanelMapMode) {
+        // Drop a pin at click location
+        addPanelLat = e.latlng.lat;
+        addPanelLng = e.latlng.lng;
+        addPanelGeoQuery = `${addPanelLat.toFixed(5)},${addPanelLng.toFixed(5)}`;
+        const nameGuess = `Pin at ${addPanelLat.toFixed(4)}, ${addPanelLng.toFixed(4)}`;
+        document.getElementById('ap-search').value = nameGuess;
+        document.getElementById('ap-results').innerHTML = '';
+        const sel = document.getElementById('ap-selected');
+        sel.style.display = 'block';
+        sel.textContent = `📍 ${addPanelLat.toFixed(4)}, ${addPanelLng.toFixed(4)}`;
+        addPanelMapMode = false;
+        document.getElementById('ap-map-btn').classList.remove('active');
+        document.getElementById('ap-map-hint').classList.remove('show');
+        // Re-open add panel on mobile
+        if (window.innerWidth <= 768) {
+          document.getElementById('add-panel').classList.add('open');
+        }
+        return;
+      }
       const sb = document.getElementById('sidebar');
       if (sb && window.innerWidth <= 768) sb.classList.remove('sheet-open');
     });
