@@ -841,6 +841,23 @@ function normalizeCities() {
   });
 }
 
+// Ensure every stop has a `type` field ("activity" or "transit").
+// For cached data without it, infer from emoji and stop name.
+const TRANSIT_EMOJIS = new Set(['✈️','🚄','🚌','🚃','🚕','🚐','🛫','🛬','🚆','🚇','🚊','🚁','⛴️','🚢']);
+const TRANSIT_KEYWORDS = /\b(flight|depart|arriv|shinkansen|transfer|check.?in|check.?out|taxi|uber|bus\b|train\b|station\b|airport)/i;
+function normalizeStopTypes() {
+  if (!tripData?.days) return;
+  tripData.days.forEach(day => {
+    (day.stops || []).forEach(stop => {
+      if (!stop.type) {
+        const emoji = stop.emoji || '';
+        const name = stop.name || '';
+        stop.type = (TRANSIT_EMOJIS.has(emoji) || TRANSIT_KEYWORDS.test(name)) ? 'transit' : 'activity';
+      }
+    });
+  });
+}
+
 // ─── Main generation pipeline ─────────────────────────────────────
 async function generate(force = false) {
   try {
@@ -868,7 +885,7 @@ async function generate(force = false) {
           ls3el.textContent = '⚡ Geocoding skipped (cached)';
           step('ls3','done');
           tripData = cacheJson.data;
-          normalizeCities();
+          normalizeCities(); normalizeStopTypes();
           annotateStopsWithSheetRows();
           step('ls4','active'); setMsg('Building map...');
           await delay(300);
@@ -898,7 +915,7 @@ async function generate(force = false) {
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
     tripData = geocoded;
-    normalizeCities();
+    normalizeCities(); normalizeStopTypes();
     annotateStopsWithSheetRows();
 
     // Store result in KV cache (non-blocking)
@@ -1081,6 +1098,7 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
           "name": "Leave SFO",
           "detail": "Flight to Tokyo via Seoul",
           "emoji": "✈️",
+          "type": "transit",
           "geoQuery": "San Francisco International Airport SFO California USA"
         }
       ]
@@ -1102,6 +1120,10 @@ RULES:
 - "geoQuery": a specific search string for geocoding. Include the landmark/place name + neighborhood + city + country.
   Examples: "Meiji Shrine Shibuya Tokyo Japan", "Gwangjang Market Seoul South Korea", "SFO Airport San Francisco USA"
   NEVER leave geoQuery empty — every stop needs one for the map.
+- "type": must be "activity" or "transit". Use "transit" for transportation stops (flights, trains, buses,
+  shinkansen, airport arrivals/departures, station transfers, taxi/uber rides, check-in/check-out of hotels
+  that are just logistics). Use "activity" for sightseeing, restaurants, shrines, parks, shopping, experiences,
+  museums, landmarks — anything the traveler is going TO as a destination.
 - "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
 - "detail": combine Address + Notes columns. Use \\n for line breaks.
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
@@ -1699,7 +1721,7 @@ async function submitAddStop() {
 
     // Insert into in-memory data
     day.stops.splice(insertAt, 0, stop);
-    normalizeCities(); // refresh cities array for this day
+    normalizeCities(); normalizeStopTypes();
 
     // Rebuild sidebar timeline for this day only
     rebuildDaySidebar(addPanelDayId);
@@ -1878,7 +1900,7 @@ async function deleteStop(dayId, stopIdx) {
   const stopName = stop?.name || 'this stop';
   if (!confirm(`Remove "${stopName}" from the itinerary?`)) return;
   day.stops.splice(stopIdx, 1);
-  normalizeCities(); // refresh cities array after removal
+  normalizeCities(); normalizeStopTypes();
   rebuildDaySidebar(dayId);
   renderMarkers(tripData.days);
   try {
@@ -2266,7 +2288,7 @@ function initMap(days) {
       if (tripData && tripData.days) {
         const bounds = [];
         tripData.days.forEach(day => {
-          (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180)
+          (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180&&s.type!=='transit')
             .forEach(s => bounds.push([s.lat, s.lng]));
         });
         if (bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds), {padding:[50,50], maxZoom:12});
@@ -2316,12 +2338,13 @@ function renderMarkers(days) {
 
   days.forEach(day => {
     const c = col(day.city);
-    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180).forEach((stop,i)=>{
-      const prev = i>0 ? day.stops[i-1] : null;
+    (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90&&Math.abs(s.lng)<=180&&s.type!=='transit').forEach((stop,i)=>{
+      const origIdx = day.stops.indexOf(stop);
+      const prev = origIdx>0 ? day.stops[origIdx-1] : null;
       const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
-      m.bindPopup(popupContent(stop,day,prev,i));
+      m.bindPopup(popupContent(stop,day,prev,origIdx));
       m.addTo(layerGroup);
-      markerRegistry[`${day.id}-${i}`] = m;
+      markerRegistry[`${day.id}-${origIdx}`] = m;
       bounds.push([stop.lat,stop.lng]);
     });
   });
