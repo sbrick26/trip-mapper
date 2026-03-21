@@ -311,19 +311,20 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   #refresh-btn { padding:4px 9px; font-size:10px; flex-shrink:0; }
 
   /* ── App: map behind, sidebar as bottom sheet ── */
-  #app.show { display:block; position:relative; }
-  #map-wrap { position:absolute !important; inset:0; }
+  #app.show { display:block; position:relative; overflow:hidden; }
+  #map-wrap { position:absolute !important; inset:0; z-index:0; }
 
   /* ── Bottom sheet ── */
   #sidebar {
     position:absolute; bottom:0; left:0; right:0;
     width:100% !important; min-width:0 !important;
-    max-height:80vh; overflow:hidden;
+    height:80vh; overflow:hidden;
     border-right:none; border-top:1px solid var(--border);
     border-radius:20px 20px 0 0;
     z-index:50; display:flex; flex-direction:column;
-    transform:translateY(calc(100% - 84px));
+    transform:translateY(calc(100% - 88px));
     transition:transform .32s cubic-bezier(.4,0,.2,1);
+    will-change:transform;
   }
   #sidebar.sheet-open { transform:translateY(0); }
 
@@ -361,7 +362,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
   /* ── Map overlay card: float above peek ── */
   #day-card {
-    top:auto !important; bottom:94px;
+    top:auto !important; bottom:98px;
     right:10px !important; left:10px; max-width:unset !important;
   }
 
@@ -536,6 +537,8 @@ async function generate(force = false) {
           document.getElementById('loading').style.display = 'none';
           document.getElementById('topbar').style.display  = 'flex';
           document.getElementById('app').classList.add('show');
+          // Leaflet must recalculate size after container becomes visible
+          requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
           return;
         }
       } catch(e) {
@@ -576,6 +579,8 @@ async function generate(force = false) {
     document.getElementById('loading').style.display = 'none';
     document.getElementById('topbar').style.display  = 'flex';
     document.getElementById('app').classList.add('show');
+    // Leaflet must recalculate size after container becomes visible
+    requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
 
   } catch(err) {
     document.getElementById('loading').style.display = 'none';
@@ -938,7 +943,14 @@ function buildSidebar(days, allDays) {
         const el = document.getElementById(`day-${day.id}`);
         if (el) {
           const d = allDays.find(d => d.id === day.id);
-          if (d) { toggleDay(d, el); setTimeout(() => el.scrollIntoView({behavior:'smooth',block:'start'}), 120); }
+          if (d) {
+            toggleDay(d, el);
+            setTimeout(() => {
+              const sheetBody = sb.querySelector('.sheet-body');
+              if (sheetBody) sheetBody.scrollTop = el.offsetTop;
+              else el.scrollIntoView({behavior:'smooth',block:'start'});
+            }, 120);
+          }
         }
       };
       strip.appendChild(tab);
@@ -1048,7 +1060,13 @@ function toggleDay(day, el) {
   if (!isOpen) {
     el.classList.add('open');
     activeDay = day.id;
-    el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    // Scroll within .sheet-body on mobile; native scrollIntoView on desktop
+    const sheetBody = document.querySelector('#sidebar .sheet-body');
+    if (sheetBody && window.innerWidth <= 768) {
+      setTimeout(() => { sheetBody.scrollTop = el.offsetTop; }, 60);
+    } else {
+      el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    }
     renderDayMarkers(day);
 
     // Sync mobile sheet: update label + highlight tab
