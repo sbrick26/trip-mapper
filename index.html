@@ -523,6 +523,11 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 }
 #ap-search:focus, #ap-custom-name:focus { border-color:var(--accent); }
 #ap-custom-name::placeholder { color:#302c28; }
+@media (max-width: 768px) {
+  .setup-box input,
+  #ap-search, #ap-custom-name,
+  .ap-field input, .ap-field select, .ap-field textarea { font-size: 16px; }
+}
 </style>
 </head>
 <body>
@@ -1374,24 +1379,28 @@ async function searchPlaces(query) {
   // ── Google Maps API path (if key is set and API is loaded) ──────
   if (GOOGLE_MAPS_API_KEY && window.google?.maps?.places) {
     if (addSearchMode === 'address') {
-      // Geocoding by address
-      const geocoder = new google.maps.Geocoder();
-      geocoder.geocode({ address: query }, (results, status) => {
-        if (status !== 'OK' || !results?.length) {
-          resultsDiv.innerHTML = '<div class="ap-no-results">No results — try a more specific address</div>';
+      // Address autocomplete — same live-suggestions approach as name mode
+      const svc = new google.maps.places.AutocompleteService();
+      svc.getPlacePredictions({ input: query, types: ['address'] }, (predictions, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !predictions?.length) {
+          resultsDiv.innerHTML = '<div class="ap-no-results">No results — try a different address</div>';
           return;
         }
         resultsDiv.innerHTML = '';
-        results.slice(0, 5).forEach(r => {
+        predictions.slice(0, 5).forEach(p => {
           const btn = document.createElement('button');
           btn.className = 'ap-result';
-          btn.textContent = r.formatted_address;
+          btn.textContent = p.description;
           btn.onclick = () => {
-            const loc = r.geometry.location;
-            selectPlace({
-              lat: loc.lat(), lon: loc.lng(),
-              display_name: r.formatted_address, name: ''
-            }, r.formatted_address);
+            const placeSvc = new google.maps.places.PlacesService(leafletMap.getContainer());
+            placeSvc.getDetails({ placeId: p.place_id, fields: ['geometry','name','formatted_address'] }, (place, st) => {
+              if (st !== google.maps.places.PlacesServiceStatus.OK || !place) return;
+              const loc = place.geometry.location;
+              selectPlace({
+                lat: loc.lat(), lon: loc.lng(),
+                display_name: p.description, name: place.name
+              }, p.description);
+            });
           };
           resultsDiv.appendChild(btn);
         });
