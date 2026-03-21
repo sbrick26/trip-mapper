@@ -40,6 +40,21 @@ export default {
         });
       }
 
+      // ── GET /?geocode=<query>  →  proxy Nominatim place search ──
+      const geocodeQ = url.searchParams.get('geocode');
+      if (geocodeQ) {
+        const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(geocodeQ)}&format=json&limit=5&addressdetails=1`;
+        try {
+          const r = await fetch(nomUrl, { headers: { 'User-Agent': 'TripMapper/1.0 (travel-map-app)' } });
+          const body = await r.text();
+          return new Response(body, { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch(e) {
+          return new Response(JSON.stringify({ error: e.message }), {
+            status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+      }
+
       const target = url.searchParams.get('fetch');
       if (!target) {
         return new Response('ok', { headers: corsHeaders });
@@ -62,6 +77,15 @@ export default {
     }
 
     if (request.method === 'POST') {
+      // ── POST /cache/delete  →  remove entry from KV ──
+      if (url.pathname === '/cache/delete') {
+        const { hash } = await request.json();
+        if (env.TRIP_CACHE) await env.TRIP_CACHE.delete(hash);
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
       // ── POST /cache  →  store trip JSON in KV ──
       if (url.pathname === '/cache') {
         if (!env.TRIP_CACHE) {
