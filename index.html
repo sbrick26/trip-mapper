@@ -25,8 +25,8 @@
 html, body { height:100%; overflow:hidden; }
 body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; }
 
-/* ─────────────────── SETUP MODAL ─────────────────── */
-#setup {
+/* ─────────────────── SETUP / GOOGLE-CONNECT MODALS ─────────────────── */
+#setup, #google-connect {
   position:fixed; inset:0; z-index:9999;
   background:rgba(10,9,8,.95); backdrop-filter:blur(12px);
   display:flex; align-items:center; justify-content:center;
@@ -564,6 +564,18 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   </div>
 </div>
 
+<!-- ═══ GOOGLE CONNECT ═══════════════════════════════════════════ -->
+<div id="google-connect" style="display:none">
+  <div class="setup-box">
+    <h1>🔗 Connect <em>Google</em></h1>
+    <p class="sub">Connect your Google account to save changes back to your itinerary sheet. Takes one click — you won't be asked for permissions again.</p>
+    <button class="go-btn" id="gc-btn" onclick="doConnectGoogle()">🔗 Connect Google Sheets</button>
+    <p class="setup-hint" style="text-align:center; margin-top:14px">
+      <a href="#" onclick="skipGoogleConnect(); return false">Skip for now →</a>
+    </p>
+  </div>
+</div>
+
 <!-- ═══ TOPBAR + APP ═════════════════════════════════════════════ -->
 <div id="topbar" style="display:none">
   <div id="trip-name">🌸 <em>Travel Map</em></div>
@@ -838,11 +850,7 @@ async function generate(force = false) {
           buildApp(tripData);
           step('ls4','done');
           await delay(500);
-          document.getElementById('loading').style.display = 'none';
-          document.getElementById('topbar').style.display  = 'flex';
-          document.getElementById('app').classList.add('show');
-          // Leaflet must recalculate size after container becomes visible
-          requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
+          checkGoogleAndReveal();
           return;
         }
       } catch(e) {
@@ -880,13 +888,7 @@ async function generate(force = false) {
     buildApp(tripData);
     step('ls4','done');
     await delay(500);
-
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('topbar').style.display  = 'flex';
-    document.getElementById('app').classList.add('show');
-    // Leaflet must recalculate size after container becomes visible
-    requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
-    loadMapsAPI();
+    checkGoogleAndReveal();
 
   } catch(err) {
     document.getElementById('loading').style.display = 'none';
@@ -1223,6 +1225,62 @@ function buildApp(data) {
   initMap(data.days);
 }
 
+// ─── App reveal helpers ───────────────────────────────────────────
+function revealApp() {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('google-connect').style.display = 'none';
+  document.getElementById('topbar').style.display = 'flex';
+  document.getElementById('app').classList.add('show');
+  requestAnimationFrame(() => { if (leafletMap) leafletMap.invalidateSize(); });
+  loadMapsAPI();
+}
+
+function checkGoogleAndReveal() {
+  if (!gToken) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('google-connect').style.display = 'flex';
+    // Auto-reconnect silently if they connected before in this session
+    if (sessionStorage.getItem('_tmap_google')) {
+      doConnectGoogle(true);
+    }
+  } else {
+    revealApp();
+  }
+}
+
+function skipGoogleConnect() { revealApp(); }
+
+function doConnectGoogle(silent = false) {
+  if (!window.google?.accounts?.oauth2) {
+    if (!silent) alert('Google Identity Services not loaded yet. Please try again in a moment.');
+    return;
+  }
+  const btn = document.getElementById('gc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: 'https://www.googleapis.com/auth/spreadsheets',
+    prompt: silent ? '' : undefined,
+    callback: async (resp) => {
+      if (resp.error) {
+        console.warn('[google] OAuth error in connect screen:', resp);
+        if (btn) { btn.disabled = false; btn.textContent = '🔗 Connect Google Sheets'; }
+        return;
+      }
+      gToken = resp.access_token;
+      sessionStorage.setItem('_tmap_google', '1');
+      const topBtn = document.getElementById('google-btn');
+      topBtn.innerHTML = '✓ <span class="gb-text">Sheets Connected</span>';
+      topBtn.style.color = '#5be8a0';
+      topBtn.style.borderColor = 'rgba(91,232,160,.3)';
+      topBtn.onclick = null;
+      await fetchItinerarySheetId();
+      revealApp();
+    }
+  });
+  client.requestAccessToken();
+}
+
 // ─── Google OAuth (Sheets write access) ───────────────────────────
 function connectGoogle() {
   if (!window.google?.accounts?.oauth2) {
@@ -1239,6 +1297,7 @@ function connectGoogle() {
     callback: async (resp) => {
       if (resp.error) { console.error('[google] OAuth error:', resp); return; }
       gToken = resp.access_token;
+      sessionStorage.setItem('_tmap_google', '1');
       const btn = document.getElementById('google-btn');
       btn.innerHTML = '✓ <span class="gb-text">Sheets Connected</span>';
       btn.style.color = '#5be8a0';
