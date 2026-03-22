@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>Japan 2026 🌸</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -22,7 +22,8 @@
   --gold: #FF8C00;
 }
 *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
-html, body { height:100%; overflow:hidden; }
+html, body { height:100%; overflow:hidden; overscroll-behavior:none; }
+html { position:fixed; width:100%; }
 body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; }
 
 /* ─────────────────── SETUP / GOOGLE-CONNECT MODALS ─────────────────── */
@@ -352,7 +353,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   #google-btn { min-height:36px; }
 
   /* ── App: map behind, sidebar as bottom sheet ── */
-  #app.show { display:block; position:relative; overflow:hidden; }
+  #app.show { display:block; position:relative; overflow:hidden; touch-action:none; }
   #map-wrap { position:absolute !important; inset:0; z-index:0; }
 
   /* ── Bottom sheet ── */
@@ -376,6 +377,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
     background:var(--s1); border-radius:20px 20px 0 0;
     cursor:pointer; user-select:none;
     -webkit-tap-highlight-color:transparent;
+    touch-action:none;
   }
   .s-knob { display:flex; justify-content:center; padding:10px 0 5px; }
   .s-knob span { display:block; width:36px; height:4px; background:#CCCCCC; border-radius:2px; }
@@ -385,6 +387,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .s-tabs {
     display:flex; gap:6px; padding:4px 12px 10px;
     overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+    touch-action:pan-x;
   }
   .s-tabs::-webkit-scrollbar { display:none; }
   .s-tab {
@@ -401,7 +404,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
   /* ── Scrollable day list inside sheet ── */
   .sheet-body {
-    flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain;
+    flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; touch-action:pan-y;
   }
   .sheet-body::-webkit-scrollbar { width:2px; }
   .sheet-body::-webkit-scrollbar-thumb { background:var(--border); }
@@ -771,6 +774,22 @@ window.addEventListener('DOMContentLoaded', () => {
   if (cached) {
     document.getElementById('api-key').value = cached;
   }
+
+  // ── Prevent iOS Safari pull-to-refresh & rubber-band scrolling ──
+  document.addEventListener('touchmove', function(e) {
+    // Allow scrolling inside elements that are scrollable (sheet-body, tab strip, etc.)
+    let el = e.target;
+    while (el && el !== document.body) {
+      const style = window.getComputedStyle(el);
+      const overflowY = style.overflowY;
+      const overflowX = style.overflowX;
+      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) return;
+      if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth) return;
+      el = el.parentElement;
+    }
+    // No scrollable ancestor found — block the page-level scroll
+    e.preventDefault();
+  }, {passive: false});
 });
 
 function showErr(msg) {
@@ -2228,11 +2247,11 @@ function buildSidebar(days, allDays) {
     const sheetHeight = () => sb.offsetHeight;
 
     hdr.addEventListener('touchstart', e => {
+      isDragging = false; // always reset before checking target
       if (e.target.closest('.s-tabs')) return;
       dragStartY = e.touches[0].clientY;
       const isOpen = sb.classList.contains('sheet-open');
       dragStartTransform = isOpen ? 0 : sheetHeight() - 88;
-      isDragging = false;
       sb.style.transition = 'none';
     }, {passive: true});
 
@@ -2240,9 +2259,10 @@ function buildSidebar(days, allDays) {
       const dy = e.touches[0].clientY - dragStartY;
       if (Math.abs(dy) < 5) return;
       isDragging = true;
+      e.preventDefault(); // prevent iOS page scroll during sheet drag
       const newY = Math.max(0, Math.min(sheetHeight() - 88, dragStartTransform + dy));
       sb.style.transform = `translateY(${newY}px)`;
-    }, {passive: true});
+    }, {passive: false});
 
     hdr.addEventListener('touchend', e => {
       sb.style.transition = '';
