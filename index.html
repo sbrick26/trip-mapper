@@ -320,9 +320,9 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
 /* Marker bubble */
 .mk {
-  width:24px; height:24px; border-radius:50%;
+  width:26px; height:26px; border-radius:50%;
   display:flex; align-items:center; justify-content:center;
-  font-size:11px; border:2px solid rgba(255,255,255,.8);
+  font-size:12px; border:2px solid rgba(255,255,255,.8);
   box-shadow:0 2px 8px rgba(0,0,0,.18); cursor:pointer;
   transition:transform .12s;
 }
@@ -735,8 +735,8 @@ const GOOGLE_MAPS_API_KEY = 'AIzaSyBikDLHbBkSgDyTNTN4iypEUGVmqtTSJQA';
 // ═══════════════════════════════════════════════════════════════════
 
 const CITY_COLORS = {
-  seoul:'#D94F3B', tokyo:'#C48A1A', fuji:'#2E8BAE',
-  kyoto:'#8B3FB8', osaka:'#1E9E6B', nara:'#C94488', transit:'#777'
+  seoul:'#E05A3A', tokyo:'#D4A017', fuji:'#3BA8D4',
+  kyoto:'#9B4FCC', osaka:'#2EAF6E', nara:'#D44E8E', transit:'#999'
 };
 
 // ─── State ────────────────────────────────────────────────────────
@@ -1380,9 +1380,20 @@ function buildApp(data) {
     const btn = document.createElement('button');
     btn.className = 'cf' + (c==='all'?' on':'');
     btn.textContent = c==='all' ? 'All' : c[0].toUpperCase()+c.slice(1);
+    const cityColor = c === 'all' ? null : CITY_COLORS[c];
+    if (c === 'all') { btn.style.borderColor = 'var(--accent)'; btn.style.color = 'var(--accent)'; }
     btn.onclick = () => {
-      document.querySelectorAll('.cf').forEach(b=>b.classList.remove('on'));
+      document.querySelectorAll('.cf').forEach(b => {
+        b.classList.remove('on');
+        b.style.borderColor = ''; b.style.color = ''; b.style.background = '';
+      });
       btn.classList.add('on');
+      if (cityColor) {
+        btn.style.borderColor = cityColor; btn.style.color = cityColor;
+        btn.style.background = cityColor + '12';
+      } else {
+        btn.style.borderColor = 'var(--accent)'; btn.style.color = 'var(--accent)';
+      }
       const days = c==='all' ? data.days : data.days.filter(d => (d.cities || [d.city]).includes(c));
       buildSidebar(days, data.days);
       renderMarkers(days, c==='all' ? null : c);
@@ -2270,6 +2281,7 @@ function buildSidebar(days, allDays) {
     const el = document.createElement('div');
     el.className = 'day';
     el.id = `day-${day.id}`;
+    el.style.borderColor = c + '40';
     el.innerHTML = `
       <div class="day-hd">
         <div class="day-num" style="border-color:${c};color:${c}">${day.id}</div>
@@ -2434,7 +2446,7 @@ function mkIcon(color, emoji) {
   return L.divIcon({
     className:'',
     html:`<div class="mk" style="background:${color}">${emoji}</div>`,
-    iconSize:[24,24], iconAnchor:[12,12], popupAnchor:[0,-16]
+    iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
   });
 }
 
