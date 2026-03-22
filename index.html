@@ -295,6 +295,25 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .pu-btn.pu-itin { border-color:#8E44AD30; color:#8E44AD; background:#8E44AD0a; font-family:inherit; cursor:pointer; }
 .pu-btn.pu-itin:hover { border-color:#8E44AD; }
 
+/* Grouped popup navigation */
+.pu-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #E0E0E0; }
+.pu-nav-btn {
+  width:32px; height:32px; border-radius:50%; border:1px solid #E0E0E0;
+  background:#F7F7F7; color:#666; font-size:14px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .12s; flex-shrink:0;
+}
+.pu-nav-btn:hover { border-color:var(--accent); color:var(--accent); background:#fff; }
+.pu-nav-indicator { font-size:11px; color:#888; font-weight:500; }
+.pu-page { display:none; }
+.pu-page.active { display:block; }
+.pu-count-badge {
+  position:absolute; top:-4px; right:-4px; min-width:16px; height:16px;
+  background:#E05A3A; color:#fff; font-size:9px; font-weight:700;
+  border-radius:8px; display:flex; align-items:center; justify-content:center;
+  padding:0 3px; border:1.5px solid #fff; line-height:1;
+}
+
 .tl-stop-link { cursor:pointer; border-radius:6px; transition:background .12s; }
 .tl-stop-link:hover { background:rgba(0,0,0,.03); }
 
@@ -431,6 +450,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   /* ── Mobile touch targets (44px+ per Apple/Google HIG) ── */
   .day-hd { padding:16px; min-height:56px; }
   .act, .pu-btn { min-height:36px; padding:7px 14px; font-size:13px; display:inline-flex; align-items:center; }
+  .pu-nav-btn { width:40px; height:40px; font-size:16px; }
   .day-route-btn { min-height:48px; font-size:15px; padding:12px; }
   .add-stop-btn { padding:8px 12px; font-size:18px; min-width:40px; min-height:40px; }
 
@@ -748,6 +768,7 @@ let leafletMap = null;
 let layerGroup = null;
 let activeDay = null;
 let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
+let markerPageIndex = {}; // keyed "dayId-stopIdx" → page index in grouped popup
 
 // ─── Sheet sync state ─────────────────────────────────────────────
 let rawCSVData = null;      // full {Itinerary, Transportation, Hotels, Flights} object
@@ -1163,23 +1184,67 @@ async function fetchSheet() {
 }
 
 // ─── Claude: parse CSV to structured itinerary ────────────────────
-async function claudeCall(messages, maxTokens = 6000) {
-  const res = await fetch(WORKER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: maxTokens,
-      messages
-    })
-  });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e?.error?.message || `Claude API error ${res.status}`);
+async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
+  const maxRetries = 3;
+  const baseDelay = 3000;
+  const timeoutMs = 180000; // 3 minutes per attempt
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(WORKER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: maxTokens,
+          messages
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.content[0].text.trim();
+        return text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
+      }
+
+      // Don't retry on 4xx client errors (except 429 rate limit)
+      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e?.error?.message || `Claude API error ${res.status}`);
+      }
+
+      // Retryable: 429, 5xx, 524
+      if (attempt < maxRetries) {
+        const delayMs = baseDelay * Math.pow(2, attempt);
+        console.warn(`[claudeCall] Attempt ${attempt + 1} failed (HTTP ${res.status}), retrying in ${delayMs / 1000}s...`);
+        if (onRetry) onRetry(attempt + 1, maxRetries);
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e?.error?.message || `Claude API error ${res.status} after ${maxRetries + 1} attempts`);
+
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        if (attempt < maxRetries) {
+          const delayMs = baseDelay * Math.pow(2, attempt);
+          console.warn(`[claudeCall] Attempt ${attempt + 1} timed out, retrying in ${delayMs / 1000}s...`);
+          if (onRetry) onRetry(attempt + 1, maxRetries);
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        throw new Error('Claude API request timed out after multiple attempts. Try again or check your connection.');
+      }
+      throw err;
+    }
   }
-  const data = await res.json();
-  const text = data.content[0].text.trim();
-  return text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
 }
 
 async function claudeParse(csv) {
@@ -1260,7 +1325,9 @@ RULES:
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
 - Number days sequentially starting at 1.`;
 
-  const text = await claudeCall([{ role:'user', content:prompt }], 16000);
+  const text = await claudeCall([{ role:'user', content:prompt }], 32000, (attempt, max) => {
+    setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
+  });
   console.log('[claudeParse] Raw response length:', text.length);
   console.log('[claudeParse] First 200 chars:', text.slice(0, 200));
   try {
@@ -1308,7 +1375,9 @@ ${list}
 Return format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]
 Return one entry per location. Include ALL ${uniqueQueries.length} locations.`;
 
-  const raw = await claudeCall([{ role:'user', content:prompt }], 4000);
+  const raw = await claudeCall([{ role:'user', content:prompt }], 4000, (attempt, max) => {
+    setMsg(`Geocoding locations... (retry ${attempt} of ${max})`);
+  });
   console.log('[geocode] Raw response length:', raw.length);
 
   // Parse — handle potential wrapper
@@ -2397,8 +2466,18 @@ function buildSidebar(days, allDays) {
     if (day) renderDayMarkers(day);
 
     leafletMap.flyTo([lat, lng], 16, {duration: 0.8});
-    const mk = markerRegistry[`${dayId}-${stopIdx}`];
-    if (mk) setTimeout(() => mk.openPopup(), 850);
+    const regKey = `${dayId}-${stopIdx}`;
+    const mk = markerRegistry[regKey];
+    if (mk) setTimeout(() => {
+      mk.openPopup();
+      const pageIdx = markerPageIndex[regKey];
+      if (pageIdx !== undefined) {
+        setTimeout(() => {
+          const container = mk.getPopup().getElement();
+          navigateGroupedPopup(container, pageIdx);
+        }, 50);
+      }
+    }, 850);
 
     if (window.innerWidth <= 768) {
       document.getElementById('sidebar').classList.remove('sheet-open');
@@ -2532,29 +2611,127 @@ function popupContent(stop, day, prevStop, stopIdx) {
     </div>`;
 }
 
+// ─── Group co-located stops (within 50m) ─────────────────────────
+function groupByLocation(stopsWithMeta, thresholdKm = 0.05) {
+  const groups = [];
+  stopsWithMeta.forEach(item => {
+    let added = false;
+    for (const group of groups) {
+      if (km(group[0].stop.lat, group[0].stop.lng, item.stop.lat, item.stop.lng) < thresholdKm) {
+        group.push(item);
+        added = true;
+        break;
+      }
+    }
+    if (!added) groups.push([item]);
+  });
+  return groups;
+}
+
+function groupedPopupContent(group) {
+  if (group.length === 1) {
+    const { stop, day, prev, origIdx } = group[0];
+    return popupContent(stop, day, prev, origIdx);
+  }
+  // Sort by day id then stop index
+  group.sort((a, b) => a.day.id - b.day.id || a.origIdx - b.origIdx);
+
+  const pages = group.map((item, i) => {
+    const { stop, day, prev, origIdx } = item;
+    const content = popupContent(stop, day, prev, origIdx);
+    return `<div class="pu-page${i === 0 ? ' active' : ''}" data-page="${i}">${content}</div>`;
+  }).join('');
+
+  return `
+    <div class="pu-nav">
+      <button class="pu-nav-btn pu-nav-prev" aria-label="Previous">&#8249;</button>
+      <span class="pu-nav-indicator">1 of ${group.length}</span>
+      <button class="pu-nav-btn pu-nav-next" aria-label="Next">&#8250;</button>
+    </div>
+    ${pages}`;
+}
+
+function mkGroupedIcon(color, emoji, count) {
+  return L.divIcon({
+    className:'',
+    html:`<div class="mk" style="background:${color};position:relative">${emoji}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
+    iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
+  });
+}
+
+function navigateGroupedPopup(popupEl, targetPage) {
+  if (!popupEl) return;
+  const pages = popupEl.querySelectorAll('.pu-page');
+  const indicator = popupEl.querySelector('.pu-nav-indicator');
+  if (!pages.length) return;
+  pages.forEach(p => p.classList.remove('active'));
+  const page = popupEl.querySelector(`.pu-page[data-page="${targetPage}"]`);
+  if (page) page.classList.add('active');
+  if (indicator) indicator.textContent = `${targetPage + 1} of ${pages.length}`;
+}
+
+function attachGroupedPopupNav(marker) {
+  marker.on('popupopen', () => {
+    const container = marker.getPopup().getElement();
+    if (!container) return;
+    const pages = container.querySelectorAll('.pu-page');
+    if (pages.length <= 1) return;
+    let current = 0;
+    const prev = container.querySelector('.pu-nav-prev');
+    const next = container.querySelector('.pu-nav-next');
+    if (prev) prev.addEventListener('click', (e) => {
+      e.stopPropagation();
+      current = (current - 1 + pages.length) % pages.length;
+      navigateGroupedPopup(container, current);
+    });
+    if (next) next.addEventListener('click', (e) => {
+      e.stopPropagation();
+      current = (current + 1) % pages.length;
+      navigateGroupedPopup(container, current);
+    });
+  });
+}
+
 function renderMarkers(days, filterCity) {
   layerGroup.clearLayers();
   markerRegistry = {};
+  markerPageIndex = {};
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
+  // Collect all visible stops with metadata
+  const allStops = [];
   days.forEach(day => {
     (day.stops||[]).filter(s=>{
       if (!s.lat||!s.lng||Math.abs(s.lat)>90||Math.abs(s.lng)>180) return false;
       if (s.type==='transit') return false;
-      // When a specific city tab is selected, only show stops IN that city
       if (filterCity && (s.city||day.city) !== filterCity) return false;
       return true;
     }).forEach((stop)=>{
       const origIdx = day.stops.indexOf(stop);
       const prev = origIdx>0 ? day.stops[origIdx-1] : null;
-      const c = col(stop.city || day.city);
-      const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
-      m.bindPopup(popupContent(stop,day,prev,origIdx));
-      m.addTo(layerGroup);
-      markerRegistry[`${day.id}-${origIdx}`] = m;
-      bounds.push([stop.lat,stop.lng]);
+      allStops.push({ stop, day, origIdx, prev });
     });
+  });
+
+  // Group co-located stops and render
+  const groups = groupByLocation(allStops);
+  groups.forEach(group => {
+    const first = group[0];
+    const c = col(first.stop.city || first.day.city);
+    const m = L.marker([first.stop.lat, first.stop.lng], {
+      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
+    });
+    m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
+    if (group.length > 1) attachGroupedPopupNav(m);
+    m.addTo(layerGroup);
+
+    // Register all stops in the group to this marker
+    group.forEach((item, pageIdx) => {
+      markerRegistry[`${item.day.id}-${item.origIdx}`] = m;
+      if (group.length > 1) markerPageIndex[`${item.day.id}-${item.origIdx}`] = pageIdx;
+    });
+    bounds.push([first.stop.lat, first.stop.lng]);
   });
 
   if (bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds),{padding:[50,50],maxZoom:12});
@@ -2563,16 +2740,32 @@ function renderMarkers(days, filterCity) {
 function renderDayMarkers(day) {
   layerGroup.clearLayers();
   markerRegistry = {};
+  markerPageIndex = {};
   const dayColor = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
-  pts.forEach((stop,i) => {
-    const prev = i>0 ? pts[i-1] : null;
-    const c = col(stop.city || day.city);
-    const m = L.marker([stop.lat,stop.lng],{icon:mkIcon(c,stop.emoji||'📍')});
-    m.bindPopup(popupContent(stop,day,prev,i));
+  // Collect stop metadata for grouping
+  const stopsMeta = pts.map((stop, i) => {
+    const prev = i > 0 ? pts[i-1] : null;
+    const origIdx = day.stops.indexOf(stop);
+    return { stop, day, origIdx, prev };
+  });
+
+  const groups = groupByLocation(stopsMeta);
+  groups.forEach(group => {
+    const first = group[0];
+    const c = col(first.stop.city || first.day.city);
+    const m = L.marker([first.stop.lat, first.stop.lng], {
+      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
+    });
+    m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
+    if (group.length > 1) attachGroupedPopupNav(m);
     m.addTo(layerGroup);
-    markerRegistry[`${day.id}-${i}`] = m;
+
+    group.forEach((item, pageIdx) => {
+      markerRegistry[`${item.day.id}-${item.origIdx}`] = m;
+      if (group.length > 1) markerPageIndex[`${item.day.id}-${item.origIdx}`] = pageIdx;
+    });
   });
 
   if (pts.length>1) {
