@@ -377,11 +377,10 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
     background:var(--s1); border-radius:20px 20px 0 0;
     cursor:pointer; user-select:none;
     -webkit-tap-highlight-color:transparent;
-    touch-action:none;
   }
-  .s-knob { display:flex; justify-content:center; padding:10px 0 5px; }
+  .s-knob { display:flex; justify-content:center; padding:10px 0 5px; touch-action:none; }
   .s-knob span { display:block; width:36px; height:4px; background:#CCCCCC; border-radius:2px; }
-  .s-label { padding:0 16px 6px; font-size:15px; color:var(--muted); font-weight:500; line-height:1.4; }
+  .s-label { padding:0 16px 6px; font-size:15px; color:var(--muted); font-weight:500; line-height:1.4; touch-action:none; }
 
   /* ── Day tab strip ── */
   .s-tabs {
