@@ -17,7 +17,7 @@
   --s3: #EFEFEF;
   --border: #E0E0E0;
   --text: #1A1A1A;
-  --muted: #777777;
+  --muted: #555555;
   --accent: #FF6B35;
   --gold: #FF8C00;
 }
@@ -102,7 +102,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 /* ─────────────────── TOPBAR ─────────────────── */
 #topbar {
   display:flex; align-items:center; gap:10px; padding:9px 16px;
-  background:var(--s1); border-bottom:1px solid var(--border);
+  background:var(--s1); border-bottom:1.5px solid var(--border);
   flex-shrink:0; flex-wrap:wrap; min-height:50px;
 }
 #trip-name { font-family:'DM Serif Display',serif; font-size:18px; font-weight:400; flex-shrink:0; }
@@ -132,7 +132,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 /* ─────────────────── SIDEBAR ─────────────────── */
 #sidebar {
   width:380px; min-width:380px; overflow-y:auto;
-  background:var(--s1); border-right:1px solid var(--border);
+  background:var(--s1); border-right:1.5px solid var(--border);
 }
 #sidebar::-webkit-scrollbar { width:3px; }
 #sidebar::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
@@ -140,7 +140,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 /* Day card */
 .day {
   cursor:pointer; transition:background .12s, box-shadow .12s;
-  margin:4px 8px; border-radius:10px; border:1px solid var(--border);
+  margin:4px 8px; border-radius:10px; border:1.5px solid var(--border);
   box-shadow:0 1px 3px rgba(0,0,0,.04); background:var(--s1);
 }
 .day:hover, .day.open { background:var(--s2); box-shadow:0 2px 6px rgba(0,0,0,.06); }
@@ -163,7 +163,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .chev { color:var(--muted); font-size:11px; flex-shrink:0; transition:transform .2s; }
 .day.open .chev { transform:rotate(90deg); }
 
-.day-body { display:none; padding:0 14px 14px 54px; }
+.day-body { display:none; padding:0 14px 14px 8px; }
 .day.open .day-body { display:block; }
 
 /* Transport banner */
@@ -191,30 +191,42 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 /* Timeline stops */
 .tl { position:relative; }
 .tl::before {
-  content:''; position:absolute; left:6px; top:8px; bottom:0;
+  content:''; position:absolute; left:56px; top:8px; bottom:0;
   width:1px; background:var(--border);
 }
-.tl-stop { position:relative; padding:7px 0 10px 24px; }
+.tl-stop {
+  position:relative; display:grid;
+  grid-template-columns:48px 14px 1fr;
+  gap:0 8px; align-items:start;
+  padding:7px 0 10px 0;
+}
 .tl-dot {
-  position:absolute; left:0; top:10px;
+  grid-column:2; grid-row:1;
   width:14px; height:14px; border-radius:50%; border:2px solid var(--bg);
   display:flex; align-items:center; justify-content:center;
+  margin-top:1px;
 }
+.stop-time {
+  grid-column:1; grid-row:1;
+  font-size:11px; color:var(--muted); text-align:right;
+  margin-top:1px; letter-spacing:.2px;
+}
+.stop-content { grid-column:3; grid-row:1 / span 4; min-width:0; }
 
 /* Connection info between stops */
 .conn {
-  display:flex; align-items:center; gap:6px;
-  margin:0 0 6px 0; padding:5px 9px;
-  background:var(--bg); border-radius:6px; border:1px solid var(--border);
-  font-size:11px; color:var(--muted);
+  display:flex; align-items:center; gap:4px;
+  margin:0 0 2px 0; padding:2px 0;
+  background:none; border:none; border-radius:0;
+  font-size:10px; color:var(--muted); opacity:0.7;
 }
 .conn a {
-  color:#0088CC; text-decoration:none; font-weight:600;
-  border-left:1px solid var(--border); padding-left:5px; margin-left:3px;
+  color:var(--muted); text-decoration:none; font-weight:500;
+  border-left:none; padding-left:0; margin-left:2px;
+  opacity:0.8;
 }
-.conn a:hover { color:#006699; }
+.conn a:hover { color:#0088CC; opacity:1; }
 
-.stop-time { font-size:12px; color:var(--muted); margin-bottom:2px; letter-spacing:.2px; }
 .stop-name { font-size:14px; font-weight:600; line-height:1.3; }
 .stop-note {
   font-size:12px; color:var(--muted); margin-top:2px; line-height:1.5;
@@ -308,10 +320,10 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
 /* Marker bubble */
 .mk {
-  width:30px; height:30px; border-radius:50%;
+  width:24px; height:24px; border-radius:50%;
   display:flex; align-items:center; justify-content:center;
-  font-size:13px; border:2.5px solid rgba(255,255,255,.8);
-  box-shadow:0 2px 12px rgba(0,0,0,.18); cursor:pointer;
+  font-size:11px; border:2px solid rgba(255,255,255,.8);
+  box-shadow:0 2px 8px rgba(0,0,0,.18); cursor:pointer;
   transition:transform .12s;
 }
 .mk:hover { transform:scale(1.15); }
@@ -327,14 +339,16 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
     padding:8px 12px; min-height:48px; gap:8px;
   }
   #trip-name { font-size:16px; }
+  #trip-name em { display:none; }
   #trip-dates { display:none; }
+  .rf-text { display:none; }
+  #refresh-btn { padding:6px 10px; font-size:16px; min-width:36px; min-height:36px; justify-content:center; }
   .city-filters {
     flex-wrap:nowrap; overflow-x:auto; flex:1; min-width:0;
     scrollbar-width:none; -webkit-overflow-scrolling:touch;
   }
   .city-filters::-webkit-scrollbar { display:none; }
   .cf { font-size:12px; padding:7px 14px; min-height:36px; }
-  #refresh-btn { padding:8px 14px; font-size:13px; flex-shrink:0; min-height:36px; }
   #google-btn { min-height:36px; }
 
   /* ── App: map behind, sidebar as bottom sheet ── */
@@ -404,8 +418,8 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .day-badge { font-size:11px; }
   .stop-name { font-size:16px; }
   .stop-note { font-size:14px; line-height:1.5; -webkit-line-clamp:2; }
-  .stop-time { font-size:13px; }
-  .conn { font-size:13px; padding:8px 10px; }
+  .stop-time { font-size:12px; }
+  .conn { font-size:10px; padding:2px 0; }
   .tx-label { font-size:14px; }
   .tx-detail { font-size:13px; }
   .transit-conn { font-size:12px; }
@@ -414,13 +428,14 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 
   /* ── Mobile touch targets (44px+ per Apple/Google HIG) ── */
   .day-hd { padding:16px; min-height:56px; }
-  .act, .pu-btn { min-height:44px; padding:10px 14px; font-size:14px; display:inline-flex; align-items:center; }
+  .act, .pu-btn { min-height:36px; padding:7px 14px; font-size:13px; display:inline-flex; align-items:center; }
   .day-route-btn { min-height:48px; font-size:15px; padding:12px; }
   .add-stop-btn { padding:8px 12px; font-size:18px; min-width:40px; min-height:40px; }
 
   /* ── Mobile spacing — nothing crammed ── */
-  .tl-stop { padding:10px 0 14px 28px; }
-  .day-body { padding:0 16px 16px 54px; }
+  .tl-stop { padding:10px 0 14px 0; grid-template-columns:42px 14px 1fr; gap:0 6px; }
+  .tl::before { left:48px; }
+  .day-body { padding:0 14px 16px 8px; }
   .stop-acts { gap:8px; margin-top:8px; }
 
   /* ── Mobile popup ── */
@@ -647,7 +662,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   <div id="trip-dates"></div>
   <div class="city-filters" id="filters"></div>
   <button id="google-btn" onclick="connectGoogle()">🔗 <span class="gb-text">Connect Google</span></button>
-  <button id="refresh-btn" onclick="doRefresh()">↺ Refresh</button>
+  <button id="refresh-btn" onclick="doRefresh()">↺ <span class="rf-text">Refresh</span></button>
 </div>
 
 <div id="app">
@@ -720,8 +735,8 @@ const GOOGLE_MAPS_API_KEY = 'AIzaSyBikDLHbBkSgDyTNTN4iypEUGVmqtTSJQA';
 // ═══════════════════════════════════════════════════════════════════
 
 const CITY_COLORS = {
-  seoul:'#e87c5b', tokyo:'#e8c55b', fuji:'#5bbfe8',
-  kyoto:'#b05be8', osaka:'#5be8a0', nara:'#e85bb0', transit:'#888'
+  seoul:'#D94F3B', tokyo:'#C48A1A', fuji:'#2E8BAE',
+  kyoto:'#8B3FB8', osaka:'#1E9E6B', nara:'#C94488', transit:'#777'
 };
 
 // ─── State ────────────────────────────────────────────────────────
@@ -1897,12 +1912,14 @@ function buildStopHTML(day, stop, i) {
   const hasCoords = !!(stop.lat && stop.lng);
   return `<div class="tl-stop${hasCoords?' tl-stop-link':''}" id="stop-${day.id}-${i}"
       ${hasCoords ? `data-day-id="${day.id}" data-stop-idx="${i}" data-lat="${stop.lat}" data-lng="${stop.lng}"` : ''}>
-    <div class="tl-dot" style="background:${c}"></div>
-    ${connHtml}
     <div class="stop-time">${stop.time||''}</div>
-    <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
-    <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
-    <div class="stop-acts">${actsHtml}</div>
+    <div class="tl-dot" style="background:${c}"></div>
+    <div class="stop-content">
+      ${connHtml}
+      <div class="stop-name">${stop.emoji||''} ${stop.name}</div>
+      <div class="stop-note">${(stop.detail||'').replace(/\\n/g,'<br>')}</div>
+      <div class="stop-acts">${actsHtml}</div>
+    </div>
   </div>`;
 }
 
@@ -2417,7 +2434,7 @@ function mkIcon(color, emoji) {
   return L.divIcon({
     className:'',
     html:`<div class="mk" style="background:${color}">${emoji}</div>`,
-    iconSize:[30,30], iconAnchor:[15,15], popupAnchor:[0,-20]
+    iconSize:[24,24], iconAnchor:[12,12], popupAnchor:[0,-16]
   });
 }
 
