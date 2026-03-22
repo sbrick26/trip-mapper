@@ -2223,6 +2223,43 @@ function buildSidebar(days, allDays) {
 
     hdr.addEventListener('click', () => sb.classList.toggle('sheet-open'));
 
+    // ── Drag-to-move bottom sheet ──
+    let dragStartY = 0, dragStartTransform = 0, isDragging = false;
+    const sheetHeight = () => sb.offsetHeight;
+
+    hdr.addEventListener('touchstart', e => {
+      if (e.target.closest('.s-tabs')) return;
+      dragStartY = e.touches[0].clientY;
+      const isOpen = sb.classList.contains('sheet-open');
+      dragStartTransform = isOpen ? 0 : sheetHeight() - 88;
+      isDragging = false;
+      sb.style.transition = 'none';
+    }, {passive: true});
+
+    hdr.addEventListener('touchmove', e => {
+      const dy = e.touches[0].clientY - dragStartY;
+      if (Math.abs(dy) < 5) return;
+      isDragging = true;
+      const newY = Math.max(0, Math.min(sheetHeight() - 88, dragStartTransform + dy));
+      sb.style.transform = `translateY(${newY}px)`;
+    }, {passive: true});
+
+    hdr.addEventListener('touchend', e => {
+      sb.style.transition = '';
+      if (!isDragging) return;
+      e.preventDefault();
+      const currentY = parseFloat(sb.style.transform.replace(/[^0-9.-]/g, '')) || 0;
+      const threshold = (sheetHeight() - 88) * 0.3;
+      const isOpen = sb.classList.contains('sheet-open');
+      if (isOpen) {
+        if (currentY > threshold) { sb.classList.remove('sheet-open'); }
+        sb.style.transform = '';
+      } else {
+        if (currentY < (sheetHeight() - 88) - threshold) { sb.classList.add('sheet-open'); }
+        sb.style.transform = '';
+      }
+    });
+
     const strip = document.getElementById('s-tabs');
     allDays.forEach(day => {
       // Insert transit indicator between tabs when this day has transport
