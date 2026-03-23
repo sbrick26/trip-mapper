@@ -307,25 +307,6 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .pu-btn.pu-itin { border-color:#8E44AD30; color:#8E44AD; background:#8E44AD0a; font-family:inherit; cursor:pointer; }
 .pu-btn.pu-itin:hover { border-color:#8E44AD; }
 
-/* Grouped popup navigation */
-.pu-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #E0E0E0; }
-.pu-nav-btn {
-  width:26px; height:26px; border-radius:50%; border:1px solid #E0E0E0;
-  background:#F7F7F7; color:#666; font-size:12px; cursor:pointer;
-  display:flex; align-items:center; justify-content:center;
-  transition:all .12s; flex-shrink:0;
-}
-.pu-nav-btn:hover { border-color:var(--accent); color:var(--accent); background:#fff; }
-.pu-nav-indicator { font-size:11px; color:#888; font-weight:500; }
-.pu-page { display:none; }
-.pu-page.active { display:block; }
-.pu-count-badge {
-  position:absolute; top:-4px; right:-4px; min-width:16px; height:16px;
-  background:#E05A3A; color:#fff; font-size:9px; font-weight:700;
-  border-radius:8px; display:flex; align-items:center; justify-content:center;
-  padding:0 3px; border:1.5px solid #fff; line-height:1;
-}
-
 .tl-stop-link { cursor:pointer; border-radius:6px; transition:background .12s; }
 .tl-stop-link:hover { background:rgba(0,0,0,.03); }
 
@@ -503,7 +484,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   /* ── Mobile touch targets (44px+ per Apple/Google HIG) ── */
   .day-hd { padding:16px; min-height:56px; }
   .act, .pu-btn { min-height:36px; padding:7px 14px; font-size:13px; display:inline-flex; align-items:center; }
-  .pu-nav-btn { width:32px; height:32px; font-size:14px; }
+
   .day-route-btn { min-height:48px; font-size:15px; padding:12px; }
   .add-stop-btn { padding:8px 12px; font-size:18px; min-width:40px; min-height:40px; }
 
@@ -826,7 +807,6 @@ let leafletMap = null;
 let layerGroup = null;
 let activeDay = null;
 let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
-let markerPageIndex = {}; // keyed "dayId-stopIdx" → page index in grouped popup
 let currentNavStops = []; // activity stops for current day's stop-nav bar
 let currentNavIdx = -1;   // currently focused stop in stop-nav
 let _navInProgress = false; // true while programmatic nav is opening a popup (prevents popupopen sync)
@@ -2603,16 +2583,7 @@ function buildSidebar(days, allDays) {
     const mk = markerRegistry[regKey];
     if (mk) setTimeout(() => {
       mk.openPopup();
-      const pageIdx = markerPageIndex[regKey];
-      if (pageIdx !== undefined) {
-        setTimeout(() => {
-          const container = mk.getPopup().getElement();
-          navigateGroupedPopup(container, pageIdx);
-          _navInProgress = false;
-        }, 50);
-      } else {
-        _navInProgress = false;
-      }
+      _navInProgress = false;
     }, 850);
     if (!mk) _navInProgress = false;
 
@@ -2786,71 +2757,20 @@ function groupByLocation(stopsWithMeta, thresholdKm = 0.05) {
   return groups;
 }
 
-function groupedPopupContent(group) {
-  if (group.length === 1) {
-    const { stop, day, prev, origIdx } = group[0];
-    return popupContent(stop, day, prev, origIdx);
-  }
-  // Sort by day id then stop index
-  group.sort((a, b) => a.day.id - b.day.id || a.origIdx - b.origIdx);
-
-  const pages = group.map((item, i) => {
-    const { stop, day, prev, origIdx } = item;
-    const content = popupContent(stop, day, prev, origIdx);
-    return `<div class="pu-page${i === 0 ? ' active' : ''}" data-page="${i}">${content}</div>`;
-  }).join('');
-
-  return `
-    <div class="pu-nav">
-      <button class="pu-nav-btn pu-nav-prev" aria-label="Previous">&#8249;</button>
-      <span class="pu-nav-indicator">1 of ${group.length}</span>
-      <button class="pu-nav-btn pu-nav-next" aria-label="Next">&#8250;</button>
-    </div>
-    ${pages}`;
+function groupPixelOffset(index, groupSize) {
+  if (groupSize <= 1) return 0;
+  return (index - (groupSize - 1) / 2) * 28;
 }
 
-function mkGroupedIcon(color, label, count) {
+function mkGroupedIcon(color, label, offsetX = 0) {
   const isNum = typeof label === 'number';
   const style = isNum
     ? `background:${color};position:relative;font-weight:700;font-size:11px;color:#fff`
     : `background:${color};position:relative;font-size:12px`;
   return L.divIcon({
     className:'',
-    html:`<div class="mk" style="${style}">${label}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
-    iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
-  });
-}
-
-function navigateGroupedPopup(popupEl, targetPage) {
-  if (!popupEl) return;
-  const pages = popupEl.querySelectorAll('.pu-page');
-  const indicator = popupEl.querySelector('.pu-nav-indicator');
-  if (!pages.length) return;
-  pages.forEach(p => p.classList.remove('active'));
-  const page = popupEl.querySelector(`.pu-page[data-page="${targetPage}"]`);
-  if (page) page.classList.add('active');
-  if (indicator) indicator.textContent = `${targetPage + 1} of ${pages.length}`;
-}
-
-function attachGroupedPopupNav(marker) {
-  marker.on('popupopen', () => {
-    const container = marker.getPopup().getElement();
-    if (!container) return;
-    const pages = container.querySelectorAll('.pu-page');
-    if (pages.length <= 1) return;
-    let current = 0;
-    const prev = container.querySelector('.pu-nav-prev');
-    const next = container.querySelector('.pu-nav-next');
-    if (prev) prev.addEventListener('click', (e) => {
-      e.stopPropagation();
-      current = (current - 1 + pages.length) % pages.length;
-      navigateGroupedPopup(container, current);
-    });
-    if (next) next.addEventListener('click', (e) => {
-      e.stopPropagation();
-      current = (current + 1) % pages.length;
-      navigateGroupedPopup(container, current);
-    });
+    html:`<div class="mk" style="${style}">${label}</div>`,
+    iconSize:[26,26], iconAnchor:[13 - offsetX, 13], popupAnchor:[0,-17]
   });
 }
 
@@ -2897,16 +2817,7 @@ function navigateStop(direction) {
   const mk = markerRegistry[regKey];
   if (mk) setTimeout(() => {
     mk.openPopup();
-    const pageIdx = markerPageIndex[regKey];
-    if (pageIdx !== undefined) {
-      setTimeout(() => {
-        const container = mk.getPopup().getElement();
-        navigateGroupedPopup(container, pageIdx);
-        _navInProgress = false;
-      }, 50);
-    } else {
-      _navInProgress = false;
-    }
+    _navInProgress = false;
   }, 650);
   if (!mk) _navInProgress = false;
 }
@@ -2915,7 +2826,6 @@ function renderMarkers(days, filterCity) {
   hideStopNav();
   layerGroup.clearLayers();
   markerRegistry = {};
-  markerPageIndex = {};
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
@@ -2934,24 +2844,22 @@ function renderMarkers(days, filterCity) {
     });
   });
 
-  // Group co-located stops and render
+  // Group co-located stops and render side by side
   const groups = groupByLocation(allStops);
   groups.forEach(group => {
-    const first = group[0];
-    const c = col(first.stop.city || first.day.city);
-    const m = L.marker([first.stop.lat, first.stop.lng], {
-      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
+    const N = group.length;
+    group.forEach((item, i) => {
+      const { stop, day, origIdx, prev } = item;
+      const c = col(stop.city || day.city);
+      const offsetX = groupPixelOffset(i, N);
+      const m = L.marker([stop.lat, stop.lng], {
+        icon: mkGroupedIcon(c, stop.emoji || '📍', offsetX)
+      });
+      m.bindPopup(popupContent(stop, day, prev, origIdx), { maxWidth: 280 });
+      m.addTo(layerGroup);
+      markerRegistry[`${day.id}-${origIdx}`] = m;
+      bounds.push([stop.lat, stop.lng]);
     });
-    m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
-    if (group.length > 1) attachGroupedPopupNav(m);
-    m.addTo(layerGroup);
-
-    // Register all stops in the group to this marker
-    group.forEach((item, pageIdx) => {
-      markerRegistry[`${item.day.id}-${item.origIdx}`] = m;
-      if (group.length > 1) markerPageIndex[`${item.day.id}-${item.origIdx}`] = pageIdx;
-    });
-    bounds.push([first.stop.lat, first.stop.lng]);
   });
 
   if (bounds.length) leafletMap.fitBounds(L.latLngBounds(bounds),{padding:[50,50],maxZoom:12});
@@ -2960,7 +2868,6 @@ function renderMarkers(days, filterCity) {
 function renderDayMarkers(day) {
   layerGroup.clearLayers();
   markerRegistry = {};
-  markerPageIndex = {};
   const dayColor = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
@@ -2973,18 +2880,17 @@ function renderDayMarkers(day) {
 
   const groups = groupByLocation(stopsMeta);
   groups.forEach(group => {
-    const first = group[0];
-    const c = col(first.stop.city || first.day.city);
-    const m = L.marker([first.stop.lat, first.stop.lng], {
-      icon: mkGroupedIcon(c, first.activityNum, group.length)
-    });
-    m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
-    if (group.length > 1) attachGroupedPopupNav(m);
-    m.addTo(layerGroup);
-
-    group.forEach((item, pageIdx) => {
-      markerRegistry[`${item.day.id}-${item.origIdx}`] = m;
-      if (group.length > 1) markerPageIndex[`${item.day.id}-${item.origIdx}`] = pageIdx;
+    const N = group.length;
+    group.forEach((item, i) => {
+      const { stop, day, origIdx, prev, activityNum } = item;
+      const c = col(stop.city || day.city);
+      const offsetX = groupPixelOffset(i, N);
+      const m = L.marker([stop.lat, stop.lng], {
+        icon: mkGroupedIcon(c, activityNum, offsetX)
+      });
+      m.bindPopup(popupContent(stop, day, prev, origIdx), { maxWidth: 280 });
+      m.addTo(layerGroup);
+      markerRegistry[`${day.id}-${origIdx}`] = m;
     });
   });
 
