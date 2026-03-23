@@ -1215,11 +1215,11 @@ async function fetchSheet() {
 async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
   const maxRetries = 3;
   const baseDelay = 3000;
-  const timeoutMs = 180000; // 3 minutes per attempt
+  const timeoutMs = 180000; // 3 minutes — resets on each streamed chunk
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    let timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(WORKER_URL, {
@@ -1232,34 +1232,72 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
         }),
         signal: controller.signal
       });
+
+      // Error responses (worker returns JSON for 4xx/5xx)
+      if (!res.ok) {
+        clearTimeout(timeoutId);
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e?.error?.message || `Claude API error ${res.status}`);
+        }
+        if (attempt < maxRetries) {
+          const delayMs = baseDelay * Math.pow(2, attempt);
+          console.warn(`[claudeCall] Attempt ${attempt + 1} failed (HTTP ${res.status}), retrying in ${delayMs / 1000}s...`);
+          if (onRetry) onRetry(attempt + 1, maxRetries);
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e?.error?.message || `Claude API error ${res.status} after ${maxRetries + 1} attempts`);
+      }
+
+      // ── Read SSE stream ──
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let fullText = '';
+      let streamError = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Reset stall timeout on each chunk
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete last line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6);
+          if (jsonStr === '[DONE]') continue;
+          try {
+            const evt = JSON.parse(jsonStr);
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              fullText += evt.delta.text;
+            } else if (evt.type === 'error') {
+              streamError = evt.error?.message || 'Stream error from Claude';
+            }
+          } catch (_) { /* skip non-JSON lines */ }
+        }
+      }
+
       clearTimeout(timeoutId);
 
-      if (res.ok) {
-        const data = await res.json();
-        const text = data.content[0].text.trim();
-        return text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
-      }
+      if (streamError) throw new Error(streamError);
+      if (!fullText) throw new Error('Claude returned empty response');
 
-      // Don't retry on 4xx client errors (except 429 rate limit)
-      if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e?.error?.message || `Claude API error ${res.status}`);
-      }
-
-      // Retryable: 429, 5xx, 524
-      if (attempt < maxRetries) {
-        const delayMs = baseDelay * Math.pow(2, attempt);
-        console.warn(`[claudeCall] Attempt ${attempt + 1} failed (HTTP ${res.status}), retrying in ${delayMs / 1000}s...`);
-        if (onRetry) onRetry(attempt + 1, maxRetries);
-        await new Promise(r => setTimeout(r, delayMs));
-        continue;
-      }
-
-      const e = await res.json().catch(() => ({}));
-      throw new Error(e?.error?.message || `Claude API error ${res.status} after ${maxRetries + 1} attempts`);
+      const text = fullText.trim();
+      return text.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');
 
     } catch (err) {
       clearTimeout(timeoutId);
+      // Retry on timeout (stall)
       if (err.name === 'AbortError') {
         if (attempt < maxRetries) {
           const delayMs = baseDelay * Math.pow(2, attempt);
@@ -1269,6 +1307,14 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
           continue;
         }
         throw new Error('Claude API request timed out after multiple attempts. Try again or check your connection.');
+      }
+      // Retry on network disconnect mid-stream
+      if (err instanceof TypeError && attempt < maxRetries) {
+        const delayMs = baseDelay * Math.pow(2, attempt);
+        console.warn(`[claudeCall] Attempt ${attempt + 1} stream disconnected, retrying in ${delayMs / 1000}s...`);
+        if (onRetry) onRetry(attempt + 1, maxRetries);
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
       }
       throw err;
     }
