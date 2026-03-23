@@ -1081,7 +1081,7 @@ async function generate(force = false) {
     step('ls2','done');
 
     step('ls3','active'); setMsg('Geocoding all locations...');
-    const geocoded = await nominatimGeocode(parsed);
+    const geocoded = await hybridGeocode(parsed);
     const totalWithCoords = geocoded.days?.reduce((n,d) => n + (d.stops||[]).filter(s=>s.lat&&s.lng).length, 0) || 0;
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
@@ -1415,7 +1415,7 @@ RULES:
 }
 
 // ─── Claude: geocode all stops ────────────────────────────────────
-async function nominatimGeocode(data) {
+async function hybridGeocode(data) {
   // Collect unique geoQueries
   const uniqueQueries = [];
   const queryMap = {}; // geoQuery string → index in uniqueQueries
@@ -1433,10 +1433,47 @@ async function nominatimGeocode(data) {
     return data;
   }
 
-  console.log(`[geocode] Geocoding ${uniqueQueries.length} unique locations via Nominatim...`);
+  // ── Step 1: Claude geocodes everything (100% coverage) ──
+  const list = uniqueQueries.map((q,i)=>`${i}: ${q}`).join('\n');
+  console.log(`[geocode] Step 1: Claude geocoding ${uniqueQueries.length} unique locations...`);
 
-  // Batch geocode with concurrency limit (5 at a time, 1s between batches)
+  const prompt = `You are a geocoding service. Return accurate GPS coordinates for each numbered location below.
+
+RULES:
+- Respond with ONLY a JSON array. No markdown, no explanation.
+- Start with [ and end with ]
+- Every entry MUST have real, accurate lat/lng. Never use 0,0.
+- Use well-known coordinates for famous landmarks.
+
+${list}
+
+Return format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]
+Return one entry per location. Include ALL ${uniqueQueries.length} locations.`;
+
+  const raw = await claudeCall([{ role:'user', content:prompt }], 4000, (attempt, max) => {
+    setMsg(`Geocoding locations... (retry ${attempt} of ${max})`);
+  });
+  console.log('[geocode] Claude response length:', raw.length);
+
   const coordMap = {}; // index → {lat, lng}
+  try {
+    const jsonStr = raw.includes('[') ? raw.slice(raw.indexOf('['), raw.lastIndexOf(']')+1) : raw;
+    const coords = JSON.parse(jsonStr);
+    coords.forEach(c => {
+      if (c && typeof c.lat === 'number' && typeof c.lng === 'number' && c.lat !== 0 && c.lng !== 0) {
+        coordMap[c.i] = { lat: c.lat, lng: c.lng };
+      }
+    });
+  } catch(e) {
+    console.error('[geocode] Claude JSON parse failed. Raw:', raw.slice(0,500));
+    throw new Error('Geocoding returned invalid JSON. Check console.');
+  }
+
+  console.log(`[geocode] Claude found ${Object.keys(coordMap).length}/${uniqueQueries.length} locations`);
+
+  // ── Step 2: Nominatim refinement (overrides Claude coords where possible) ──
+  console.log('[geocode] Step 2: Refining with Nominatim...');
+  let refined = 0;
   const batchSize = 5;
   for (let i = 0; i < uniqueQueries.length; i += batchSize) {
     const batch = uniqueQueries.slice(i, i + batchSize);
@@ -1452,22 +1489,19 @@ async function nominatimGeocode(data) {
             return { idx: globalIdx, lat, lng: lon };
           }
         }
-        console.warn(`[geocode] No results for: ${query}`);
         return null;
-      } catch (e) {
-        console.warn(`[geocode] Failed for: ${query}`, e.message);
-        return null;
-      }
+      } catch (_) { return null; }
     }));
-    results.forEach(r => { if (r) coordMap[r.idx] = { lat: r.lat, lng: r.lng }; });
-    setMsg(`Geocoding locations... ${Math.min(i + batchSize, uniqueQueries.length)}/${uniqueQueries.length}`);
-    // Rate limit: wait 1s between batches (Nominatim policy)
+    results.forEach(r => {
+      if (r) { coordMap[r.idx] = { lat: r.lat, lng: r.lng }; refined++; }
+    });
+    setMsg(`Refining coordinates... ${Math.min(i + batchSize, uniqueQueries.length)}/${uniqueQueries.length}`);
     if (i + batchSize < uniqueQueries.length) await new Promise(r => setTimeout(r, 1000));
   }
 
-  console.log(`[geocode] Got coordinates for ${Object.keys(coordMap).length}/${uniqueQueries.length} locations`);
+  console.log(`[geocode] Nominatim refined ${refined}/${uniqueQueries.length} locations`);
 
-  // Apply coordinates to ALL stops with matching geoQuery
+  // ── Step 3: Apply coordinates to all stops ──
   let applied = 0, missing = 0;
   data.days.forEach(day => {
     (day.stops||[]).forEach(stop => {
@@ -1485,7 +1519,7 @@ async function nominatimGeocode(data) {
     });
   });
 
-  console.log(`[geocode] ✓ Applied coords to ${applied} stops, ${missing} missing`);
+  console.log(`[geocode] ✓ Applied coords to ${applied} stops, ${missing} missing (${refined} Nominatim-refined)`);
   return data;
 }
 
