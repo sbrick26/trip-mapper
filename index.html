@@ -296,10 +296,10 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .pu-btn.pu-itin:hover { border-color:#8E44AD; }
 
 /* Grouped popup navigation */
-.pu-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #E0E0E0; }
+.pu-nav { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #E0E0E0; }
 .pu-nav-btn {
-  width:32px; height:32px; border-radius:50%; border:1px solid #E0E0E0;
-  background:#F7F7F7; color:#666; font-size:14px; cursor:pointer;
+  width:26px; height:26px; border-radius:50%; border:1px solid #E0E0E0;
+  background:#F7F7F7; color:#666; font-size:12px; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   transition:all .12s; flex-shrink:0;
 }
@@ -337,6 +337,24 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   border-radius:6px;
 }
 .dc-route:hover { border-color:#0088CC; }
+
+/* Stop navigation bar */
+#stop-nav {
+  display:none; position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+  z-index:1000; background:rgba(255,255,255,.95); border:1px solid #E0E0E0;
+  border-radius:22px; padding:6px 10px; backdrop-filter:blur(10px);
+  box-shadow:0 4px 16px rgba(0,0,0,.1);
+  align-items:center; gap:8px; font-family:'DM Sans',sans-serif;
+}
+#stop-nav.show { display:flex; }
+.sn-btn {
+  width:28px; height:28px; border-radius:50%; border:1px solid #E0E0E0;
+  background:#F7F7F7; color:#666; font-size:14px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .12s; flex-shrink:0;
+}
+.sn-btn:hover { border-color:var(--accent); color:var(--accent); background:#fff; }
+.sn-label { font-size:12px; color:#444; font-weight:500; white-space:nowrap; max-width:180px; overflow:hidden; text-overflow:ellipsis; }
 
 /* Marker bubble */
 .mk {
@@ -432,6 +450,9 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
     top:auto !important; bottom:98px;
     right:10px !important; left:10px; max-width:unset !important;
   }
+  #stop-nav { bottom:96px; padding:8px 12px; }
+  .sn-btn { width:34px; height:34px; font-size:16px; }
+  .sn-label { font-size:13px; max-width:160px; }
 
   /* ── Mobile typography — clear hierarchy ── */
   .day-title { font-size:17px; }
@@ -450,7 +471,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   /* ── Mobile touch targets (44px+ per Apple/Google HIG) ── */
   .day-hd { padding:16px; min-height:56px; }
   .act, .pu-btn { min-height:36px; padding:7px 14px; font-size:13px; display:inline-flex; align-items:center; }
-  .pu-nav-btn { width:40px; height:40px; font-size:16px; }
+  .pu-nav-btn { width:32px; height:32px; font-size:14px; }
   .day-route-btn { min-height:48px; font-size:15px; padding:12px; }
   .add-stop-btn { padding:8px 12px; font-size:18px; min-width:40px; min-height:40px; }
 
@@ -692,6 +713,11 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   <div id="map-wrap">
     <div id="map"></div>
     <div id="day-card"></div>
+    <div id="stop-nav">
+      <button class="sn-btn sn-prev" aria-label="Previous stop">&#8249;</button>
+      <span class="sn-label"></span>
+      <button class="sn-btn sn-next" aria-label="Next stop">&#8250;</button>
+    </div>
   </div>
 </div>
 
@@ -769,6 +795,8 @@ let layerGroup = null;
 let activeDay = null;
 let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
 let markerPageIndex = {}; // keyed "dayId-stopIdx" → page index in grouped popup
+let currentNavStops = []; // activity stops for current day's stop-nav bar
+let currentNavIdx = -1;   // currently focused stop in stop-nav
 
 // ─── Sheet sync state ─────────────────────────────────────────────
 let rawCSVData = null;      // full {Itinerary, Transportation, Hotels, Flights} object
@@ -2537,6 +2565,23 @@ function initMap(days) {
       attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19, noWrap:true
     }).addTo(leafletMap);
     layerGroup = L.layerGroup().addTo(leafletMap);
+
+    // Stop nav bar button handlers
+    document.querySelector('.sn-prev')?.addEventListener('click', () => navigateStop(-1));
+    document.querySelector('.sn-next')?.addEventListener('click', () => navigateStop(1));
+
+    // Sync stop-nav index when a popup is opened (from pin click or sidebar)
+    leafletMap.on('popupopen', (e) => {
+      if (!currentNavStops.length) return;
+      const marker = e.popup._source;
+      // Find which stop this marker belongs to
+      for (let i = 0; i < currentNavStops.length; i++) {
+        const item = currentNavStops[i];
+        const mk = markerRegistry[`${item.day.id}-${item.origIdx}`];
+        if (mk === marker) { currentNavIdx = i; updateStopNavLabel(); break; }
+      }
+    });
+
     // On mobile: tapping the map collapses the bottom sheet
     // Also handles "pick on map" pin mode for add-panel
     leafletMap.on('click', (e) => {
@@ -2579,10 +2624,10 @@ function initMap(days) {
   renderMarkers(days);
 }
 
-function mkIcon(color, emoji) {
+function mkIcon(color, label) {
   return L.divIcon({
     className:'',
-    html:`<div class="mk" style="background:${color}">${emoji}</div>`,
+    html:`<div class="mk" style="background:${color};font-weight:700;font-size:11px;color:#fff">${label}</div>`,
     iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
   });
 }
@@ -2651,10 +2696,10 @@ function groupedPopupContent(group) {
     ${pages}`;
 }
 
-function mkGroupedIcon(color, emoji, count) {
+function mkGroupedIcon(color, label, count) {
   return L.divIcon({
     className:'',
-    html:`<div class="mk" style="background:${color};position:relative">${emoji}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
+    html:`<div class="mk" style="background:${color};position:relative;font-weight:700;font-size:11px;color:#fff">${label}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
     iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
   });
 }
@@ -2692,16 +2737,72 @@ function attachGroupedPopupNav(marker) {
   });
 }
 
+// ─── Stop navigation bar (prev/next activity within a day) ───────
+function showStopNav(day) {
+  const stops = (day.stops||[]).filter(s => s.type !== 'transit' && s.lat && s.lng && Math.abs(s.lat) <= 90);
+  if (stops.length < 2) { hideStopNav(); return; }
+  currentNavStops = stops.map(s => ({ stop: s, day, origIdx: day.stops.indexOf(s), activityNum: s._actNum }));
+  currentNavIdx = -1;
+  updateStopNavLabel();
+  document.getElementById('stop-nav').classList.add('show');
+}
+
+function hideStopNav() {
+  currentNavStops = [];
+  currentNavIdx = -1;
+  document.getElementById('stop-nav')?.classList.remove('show');
+}
+
+function updateStopNavLabel() {
+  const el = document.querySelector('.sn-label');
+  if (!el) return;
+  if (currentNavIdx < 0 || currentNavIdx >= currentNavStops.length) {
+    el.textContent = `${currentNavStops.length} stops`;
+    return;
+  }
+  const item = currentNavStops[currentNavIdx];
+  el.textContent = `${item.activityNum}. ${item.stop.name}`;
+}
+
+function navigateStop(direction) {
+  if (!currentNavStops.length) return;
+  if (currentNavIdx < 0) {
+    currentNavIdx = direction === 1 ? 0 : currentNavStops.length - 1;
+  } else {
+    currentNavIdx = (currentNavIdx + direction + currentNavStops.length) % currentNavStops.length;
+  }
+  const item = currentNavStops[currentNavIdx];
+  updateStopNavLabel();
+  leafletMap.flyTo([item.stop.lat, item.stop.lng], 16, { duration: 0.6 });
+  const regKey = `${item.day.id}-${item.origIdx}`;
+  const mk = markerRegistry[regKey];
+  if (mk) setTimeout(() => {
+    mk.openPopup();
+    const pageIdx = markerPageIndex[regKey];
+    if (pageIdx !== undefined) {
+      setTimeout(() => {
+        const container = mk.getPopup().getElement();
+        navigateGroupedPopup(container, pageIdx);
+      }, 50);
+    }
+  }, 650);
+}
+
 function renderMarkers(days, filterCity) {
+  hideStopNav();
   layerGroup.clearLayers();
   markerRegistry = {};
   markerPageIndex = {};
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
-  // Collect all visible stops with metadata
+  // Collect all visible stops with metadata and activity numbering
   const allStops = [];
   days.forEach(day => {
+    // Compute activity numbers per day (1-based, only non-transit)
+    let actNum = 0;
+    (day.stops||[]).forEach(s => { if (s.type !== 'transit') actNum++; s._actNum = actNum; });
+
     (day.stops||[]).filter(s=>{
       if (!s.lat||!s.lng||Math.abs(s.lat)>90||Math.abs(s.lng)>180) return false;
       if (s.type==='transit') return false;
@@ -2710,7 +2811,7 @@ function renderMarkers(days, filterCity) {
     }).forEach((stop)=>{
       const origIdx = day.stops.indexOf(stop);
       const prev = origIdx>0 ? day.stops[origIdx-1] : null;
-      allStops.push({ stop, day, origIdx, prev });
+      allStops.push({ stop, day, origIdx, prev, activityNum: stop._actNum });
     });
   });
 
@@ -2720,7 +2821,7 @@ function renderMarkers(days, filterCity) {
     const first = group[0];
     const c = col(first.stop.city || first.day.city);
     const m = L.marker([first.stop.lat, first.stop.lng], {
-      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
+      icon: mkGroupedIcon(c, first.activityNum, group.length)
     });
     m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
     if (group.length > 1) attachGroupedPopupNav(m);
@@ -2744,11 +2845,15 @@ function renderDayMarkers(day) {
   const dayColor = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
+  // Compute activity numbers for the day
+  let actNum = 0;
+  (day.stops||[]).forEach(s => { if (s.type !== 'transit') actNum++; s._actNum = actNum; });
+
   // Collect stop metadata for grouping
   const stopsMeta = pts.map((stop, i) => {
     const prev = i > 0 ? pts[i-1] : null;
     const origIdx = day.stops.indexOf(stop);
-    return { stop, day, origIdx, prev };
+    return { stop, day, origIdx, prev, activityNum: stop._actNum };
   });
 
   const groups = groupByLocation(stopsMeta);
@@ -2756,7 +2861,7 @@ function renderDayMarkers(day) {
     const first = group[0];
     const c = col(first.stop.city || first.day.city);
     const m = L.marker([first.stop.lat, first.stop.lng], {
-      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
+      icon: mkGroupedIcon(c, first.activityNum, group.length)
     });
     m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
     if (group.length > 1) attachGroupedPopupNav(m);
@@ -2786,6 +2891,8 @@ function renderDayMarkers(day) {
     <div class="dc-title">${day.title}</div>
     <div class="dc-meta">${pts.length} stops · ${day.city}</div>
     ${routeUrl ? `<a class="dc-route" href="${routeUrl}" target="_blank">🗺️ Full route in Google Maps</a>` : ''}`;
+
+  showStopNav(day);
 }
 </script>
 </body>
