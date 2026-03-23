@@ -156,7 +156,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 }
 .day-info { flex:1; min-width:0; }
 .day-date { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
-.day-title { font-size:15px; font-weight:600; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.day-title { font-size:14px; font-weight:600; margin-top:1px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; white-space:normal; line-height:1.3; }
 .day-badge {
   font-size:10px; padding:2px 7px; border-radius:9px;
   font-weight:700; text-transform:uppercase; letter-spacing:.3px; flex-shrink:0;
@@ -337,6 +337,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   border-radius:6px;
 }
 .dc-route:hover { border-color:#0088CC; }
+.dc-toggle { display:none; }
 
 /* Stop navigation bar */
 #stop-nav {
@@ -445,23 +446,35 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .sheet-body::-webkit-scrollbar { width:2px; }
   .sheet-body::-webkit-scrollbar-thumb { background:var(--border); }
 
-  /* ── Map overlay card: compact top-right badge ── */
+  /* ── Map overlay card: bottom-right, above stop-nav ── */
   #day-card {
-    top:12px !important; bottom:auto !important;
+    top:auto !important; bottom:150px !important;
     right:10px !important; left:auto !important;
-    max-width:175px !important; padding:8px 10px;
-    border-radius:10px;
+    max-width:180px !important; padding:8px 10px;
+    border-radius:10px; transition:all 0.25s ease;
   }
   .dc-date { font-size:9px; }
   .dc-title { font-size:11px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .dc-meta { font-size:10px; margin-top:2px; }
   .dc-route { font-size:9px; padding:3px 6px; margin-top:4px; }
+  .dc-toggle {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:22px; height:22px; border:none; background:transparent;
+    color:var(--muted); font-size:12px; cursor:pointer; padding:0;
+    margin-left:auto; flex-shrink:0; transition:transform 0.25s ease;
+  }
+  .dc-header { display:flex; align-items:center; gap:4px; }
+  #day-card.dc-minimized { padding:5px 10px; max-width:140px !important; }
+  #day-card.dc-minimized .dc-title,
+  #day-card.dc-minimized .dc-meta,
+  #day-card.dc-minimized .dc-route { display:none; }
+  #day-card.dc-minimized .dc-toggle { transform:rotate(180deg); }
   #stop-nav { bottom:96px; padding:8px 12px; }
   .sn-btn { width:34px; height:34px; font-size:16px; }
   .sn-label { font-size:13px; max-width:160px; }
 
   /* ── Mobile typography — clear hierarchy ── */
-  .day-title { font-size:17px; }
+  .day-title { font-size:15px; }
   .day-date { font-size:13px; }
   .day-badge { font-size:11px; }
   .stop-name { font-size:16px; }
@@ -2977,8 +2990,12 @@ function renderDayMarkers(day) {
   const card = document.getElementById('day-card');
   card.style.display = 'block';
   card.style.borderLeftColor = dayColor;
+  card.classList.remove('dc-minimized');
   card.innerHTML = `
-    <div class="dc-date">${day.date}</div>
+    <div class="dc-header">
+      <div class="dc-date">${day.date}</div>
+      <button class="dc-toggle" onclick="document.getElementById('day-card').classList.toggle('dc-minimized')" aria-label="Toggle day card">▾</button>
+    </div>
     <div class="dc-title">${day.title}</div>
     <div class="dc-meta">${pts.length} stops · ${day.city}</div>
     ${routeUrl ? `<a class="dc-route" href="${routeUrl}" target="_blank">🗺️ Full route in Google Maps</a>` : ''}`;
