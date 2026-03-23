@@ -1081,7 +1081,7 @@ async function generate(force = false) {
     step('ls2','done');
 
     step('ls3','active'); setMsg('Geocoding all locations...');
-    const geocoded = await claudeGeocode(parsed);
+    const geocoded = await nominatimGeocode(parsed);
     const totalWithCoords = geocoded.days?.reduce((n,d) => n + (d.stops||[]).filter(s=>s.lat&&s.lng).length, 0) || 0;
     console.log('[generate] Geocoded stops with coords:', totalWithCoords);
     step('ls3','done');
@@ -1415,7 +1415,7 @@ RULES:
 }
 
 // ─── Claude: geocode all stops ────────────────────────────────────
-async function claudeGeocode(data) {
+async function nominatimGeocode(data) {
   // Collect unique geoQueries
   const uniqueQueries = [];
   const queryMap = {}; // geoQuery string → index in uniqueQueries
@@ -1433,48 +1433,41 @@ async function claudeGeocode(data) {
     return data;
   }
 
-  const list = uniqueQueries.map((q,i)=>`${i}: ${q}`).join('\n');
-  console.log(`[geocode] Geocoding ${uniqueQueries.length} unique locations...`);
+  console.log(`[geocode] Geocoding ${uniqueQueries.length} unique locations via Nominatim...`);
 
-  const prompt = `You are a geocoding service. Return accurate GPS coordinates for each numbered location below.
-
-RULES:
-- Respond with ONLY a JSON array. No markdown, no explanation.
-- Start with [ and end with ]
-- Every entry MUST have real, accurate lat/lng. Never use 0,0.
-- Use well-known coordinates for famous landmarks.
-
-${list}
-
-Return format: [{"i":0,"lat":35.7148,"lng":139.7967},{"i":1,"lat":34.9671,"lng":135.7727}]
-Return one entry per location. Include ALL ${uniqueQueries.length} locations.`;
-
-  const raw = await claudeCall([{ role:'user', content:prompt }], 4000, (attempt, max) => {
-    setMsg(`Geocoding locations... (retry ${attempt} of ${max})`);
-  });
-  console.log('[geocode] Raw response length:', raw.length);
-
-  // Parse — handle potential wrapper
-  let coords;
-  try {
-    const jsonStr = raw.includes('[') ? raw.slice(raw.indexOf('['), raw.lastIndexOf(']')+1) : raw;
-    coords = JSON.parse(jsonStr);
-  } catch(e) {
-    console.error('[geocode] JSON parse failed. Raw:', raw.slice(0,500));
-    throw new Error('Geocoding returned invalid JSON. Check console.');
+  // Batch geocode with concurrency limit (5 at a time, 1s between batches)
+  const coordMap = {}; // index → {lat, lng}
+  const batchSize = 5;
+  for (let i = 0; i < uniqueQueries.length; i += batchSize) {
+    const batch = uniqueQueries.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(async (query, batchIdx) => {
+      const globalIdx = i + batchIdx;
+      try {
+        const res = await fetch(`${WORKER_URL}?geocode=${encodeURIComponent(query)}`);
+        const json = await res.json();
+        if (Array.isArray(json) && json.length > 0) {
+          const lat = parseFloat(json[0].lat);
+          const lon = parseFloat(json[0].lon);
+          if (!isNaN(lat) && !isNaN(lon) && lat !== 0 && lon !== 0) {
+            return { idx: globalIdx, lat, lng: lon };
+          }
+        }
+        console.warn(`[geocode] No results for: ${query}`);
+        return null;
+      } catch (e) {
+        console.warn(`[geocode] Failed for: ${query}`, e.message);
+        return null;
+      }
+    }));
+    results.forEach(r => { if (r) coordMap[r.idx] = { lat: r.lat, lng: r.lng }; });
+    setMsg(`Geocoding locations... ${Math.min(i + batchSize, uniqueQueries.length)}/${uniqueQueries.length}`);
+    // Rate limit: wait 1s between batches (Nominatim policy)
+    if (i + batchSize < uniqueQueries.length) await new Promise(r => setTimeout(r, 1000));
   }
-
-  // Build a lookup: index → {lat, lng}
-  const coordMap = {};
-  coords.forEach(c => {
-    if (c && typeof c.lat === 'number' && typeof c.lng === 'number' && c.lat !== 0 && c.lng !== 0) {
-      coordMap[c.i] = { lat: c.lat, lng: c.lng };
-    }
-  });
 
   console.log(`[geocode] Got coordinates for ${Object.keys(coordMap).length}/${uniqueQueries.length} locations`);
 
-  // Apply coordinates to ALL stops (not just the first one with that query)
+  // Apply coordinates to ALL stops with matching geoQuery
   let applied = 0, missing = 0;
   data.days.forEach(day => {
     (day.stops||[]).forEach(stop => {
@@ -2671,9 +2664,13 @@ function initMap(days) {
 }
 
 function mkIcon(color, label) {
+  const isNum = typeof label === 'number';
+  const style = isNum
+    ? `background:${color};font-weight:700;font-size:11px;color:#fff`
+    : `background:${color};font-size:12px`;
   return L.divIcon({
     className:'',
-    html:`<div class="mk" style="background:${color};font-weight:700;font-size:11px;color:#fff">${label}</div>`,
+    html:`<div class="mk" style="${style}">${label}</div>`,
     iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
   });
 }
@@ -2743,9 +2740,13 @@ function groupedPopupContent(group) {
 }
 
 function mkGroupedIcon(color, label, count) {
+  const isNum = typeof label === 'number';
+  const style = isNum
+    ? `background:${color};position:relative;font-weight:700;font-size:11px;color:#fff`
+    : `background:${color};position:relative;font-size:12px`;
   return L.divIcon({
     className:'',
-    html:`<div class="mk" style="background:${color};position:relative;font-weight:700;font-size:11px;color:#fff">${label}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
+    html:`<div class="mk" style="${style}">${label}${count > 1 ? `<span class="pu-count-badge">${count}</span>` : ''}</div>`,
     iconSize:[26,26], iconAnchor:[13,13], popupAnchor:[0,-17]
   });
 }
@@ -2785,9 +2786,9 @@ function attachGroupedPopupNav(marker) {
 
 // ─── Stop navigation bar (prev/next activity within a day) ───────
 function showStopNav(day) {
-  const stops = (day.stops||[]).filter(s => s.type !== 'transit' && s.lat && s.lng && Math.abs(s.lat) <= 90);
+  const stops = (day.stops||[]).filter(s => s.lat && s.lng && Math.abs(s.lat) <= 90);
   if (stops.length < 2) { hideStopNav(); return; }
-  currentNavStops = stops.map(s => ({ stop: s, day, origIdx: day.stops.indexOf(s), activityNum: s._actNum }));
+  currentNavStops = stops.map((s, i) => ({ stop: s, day, origIdx: day.stops.indexOf(s), activityNum: i + 1 }));
   currentNavIdx = -1;
   updateStopNavLabel();
   document.getElementById('stop-nav').classList.add('show');
@@ -2842,13 +2843,9 @@ function renderMarkers(days, filterCity) {
   document.getElementById('day-card').style.display='none';
   const bounds = [];
 
-  // Collect all visible stops with metadata and activity numbering
+  // Collect all visible stops with metadata (emoji pins in all-days view)
   const allStops = [];
   days.forEach(day => {
-    // Compute activity numbers per day (1-based, only non-transit)
-    let actNum = 0;
-    (day.stops||[]).forEach(s => { if (s.type !== 'transit') actNum++; s._actNum = actNum; });
-
     (day.stops||[]).filter(s=>{
       if (!s.lat||!s.lng||Math.abs(s.lat)>90||Math.abs(s.lng)>180) return false;
       if (s.type==='transit') return false;
@@ -2857,7 +2854,7 @@ function renderMarkers(days, filterCity) {
     }).forEach((stop)=>{
       const origIdx = day.stops.indexOf(stop);
       const prev = origIdx>0 ? day.stops[origIdx-1] : null;
-      allStops.push({ stop, day, origIdx, prev, activityNum: stop._actNum });
+      allStops.push({ stop, day, origIdx, prev });
     });
   });
 
@@ -2867,7 +2864,7 @@ function renderMarkers(days, filterCity) {
     const first = group[0];
     const c = col(first.stop.city || first.day.city);
     const m = L.marker([first.stop.lat, first.stop.lng], {
-      icon: mkGroupedIcon(c, first.activityNum, group.length)
+      icon: mkGroupedIcon(c, first.stop.emoji||'📍', group.length)
     });
     m.bindPopup(groupedPopupContent(group), { maxWidth: 280 });
     if (group.length > 1) attachGroupedPopupNav(m);
@@ -2891,15 +2888,11 @@ function renderDayMarkers(day) {
   const dayColor = col(day.city);
   const pts = (day.stops||[]).filter(s=>s.lat&&s.lng&&Math.abs(s.lat)<=90);
 
-  // Compute activity numbers for the day
-  let actNum = 0;
-  (day.stops||[]).forEach(s => { if (s.type !== 'transit') actNum++; s._actNum = actNum; });
-
-  // Collect stop metadata for grouping
+  // Collect stop metadata for grouping — sequential numbering (1, 2, 3...)
   const stopsMeta = pts.map((stop, i) => {
     const prev = i > 0 ? pts[i-1] : null;
     const origIdx = day.stops.indexOf(stop);
-    return { stop, day, origIdx, prev, activityNum: stop._actNum };
+    return { stop, day, origIdx, prev, activityNum: i + 1 };
   });
 
   const groups = groupByLocation(stopsMeta);
