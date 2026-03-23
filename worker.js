@@ -102,9 +102,12 @@ export default {
         });
       }
 
-      // ── POST /  →  proxy Anthropic API ──
+      // ── POST /  →  proxy Anthropic API (streaming) ──
       const apiKey = request.headers.get('X-Api-Key') || '';
-      const body   = await request.text();
+      const body = await request.json();
+
+      // Inject streaming to avoid Cloudflare subrequest timeout
+      body.stream = true;
 
       try {
         const upstream = await fetch('https://api.anthropic.com/v1/messages', {
@@ -114,17 +117,31 @@ export default {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',
           },
-          body,
+          body: JSON.stringify(body),
         });
-        const responseBody = await upstream.text();
-        return new Response(responseBody, {
-          status: upstream.status,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+
+        // Error responses are JSON (not SSE) — buffer and forward as-is
+        if (!upstream.ok) {
+          const errorBody = await upstream.text();
+          return new Response(errorBody, {
+            status: upstream.status,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        // Stream SSE response through to client
+        return new Response(upstream.body, {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+          },
         });
       } catch (e) {
         return new Response(JSON.stringify({ error: { message: e.message } }), {
           status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
     }
