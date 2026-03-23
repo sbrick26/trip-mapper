@@ -173,14 +173,21 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   display:flex; gap:8px; align-items:flex-start;
   background:var(--bg); border-radius:8px; padding:8px 11px;
   margin-bottom:8px; border-left:3px solid; overflow:hidden;
+  cursor:pointer;
 }
 .tx-icon { font-size:15px; line-height:1.3; flex-shrink:0; }
 .tx-body { min-width:0; overflow:hidden; }
 .tx-label { font-size:13px; font-weight:600; }
 .tx-detail { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4;
-  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
-  word-break:break-word;
+  word-break:break-word; overflow:hidden;
+  display:grid; grid-template-rows:0fr; transition:grid-template-rows .3s ease;
 }
+.tx-detail > span { overflow:hidden; }
+.tx-banner.tx-open .tx-detail { grid-template-rows:1fr; }
+.tx-preview { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.tx-banner.tx-open .tx-preview { display:none; }
 
 /* Transit connector between days */
 .transit-conn {
@@ -487,6 +494,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .stop-time { font-size:12px; }
   .conn { font-size:10px; padding:2px 0; }
   .tx-label { font-size:14px; }
+  .tx-preview { font-size:13px; }
   .tx-detail { font-size:13px; }
   .transit-conn { font-size:12px; }
   .tc-route { font-size:11px; }
@@ -2546,11 +2554,12 @@ function buildSidebar(days, allDays) {
       </div>
       <div class="day-body">
         ${day.transport ? `
-          <div class="tx-banner" style="border-color:${c}60">
+          <div class="tx-banner" style="border-color:${c}60" onclick="this.classList.toggle('tx-open')">
             <span class="tx-icon">${day.transport.icon}</span>
             <div class="tx-body">
               <div class="tx-label" style="color:${c}">${day.transport.route}</div>
-              <div class="tx-detail">${day.transport.detail}</div>
+              <div class="tx-preview">${day.transport.detail}</div>
+              <div class="tx-detail"><span>${day.transport.detail}</span></div>
             </div>
           </div>` : ''}
         <div class="tl">${timelineHtml}</div>
