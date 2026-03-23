@@ -445,11 +445,17 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .sheet-body::-webkit-scrollbar { width:2px; }
   .sheet-body::-webkit-scrollbar-thumb { background:var(--border); }
 
-  /* ── Map overlay card: float above peek ── */
+  /* ── Map overlay card: compact top-right badge ── */
   #day-card {
-    top:auto !important; bottom:98px;
-    right:10px !important; left:10px; max-width:unset !important;
+    top:12px !important; bottom:auto !important;
+    right:10px !important; left:auto !important;
+    max-width:175px !important; padding:8px 10px;
+    border-radius:10px;
   }
+  .dc-date { font-size:9px; }
+  .dc-title { font-size:11px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dc-meta { font-size:10px; margin-top:2px; }
+  .dc-route { font-size:9px; padding:3px 6px; margin-top:4px; }
   #stop-nav { bottom:96px; padding:8px 12px; }
   .sn-btn { width:34px; height:34px; font-size:16px; }
   .sn-label { font-size:13px; max-width:160px; }
@@ -797,6 +803,7 @@ let markerRegistry = {}; // keyed "dayId-stopIdx" → L.marker
 let markerPageIndex = {}; // keyed "dayId-stopIdx" → page index in grouped popup
 let currentNavStops = []; // activity stops for current day's stop-nav bar
 let currentNavIdx = -1;   // currently focused stop in stop-nav
+let _navInProgress = false; // true while programmatic nav is opening a popup (prevents popupopen sync)
 
 // ─── Sheet sync state ─────────────────────────────────────────────
 let rawCSVData = null;      // full {Itinerary, Transportation, Hotels, Flights} object
@@ -2566,6 +2573,7 @@ function buildSidebar(days, allDays) {
     const day = (tripData?.days || []).find(d => d.id === dayId);
     if (day) renderDayMarkers(day);
 
+    _navInProgress = true;
     leafletMap.flyTo([lat, lng], 16, {duration: 0.8});
     const regKey = `${dayId}-${stopIdx}`;
     const mk = markerRegistry[regKey];
@@ -2576,9 +2584,13 @@ function buildSidebar(days, allDays) {
         setTimeout(() => {
           const container = mk.getPopup().getElement();
           navigateGroupedPopup(container, pageIdx);
+          _navInProgress = false;
         }, 50);
+      } else {
+        _navInProgress = false;
       }
     }, 850);
+    if (!mk) _navInProgress = false;
 
     if (window.innerWidth <= 768) {
       document.getElementById('sidebar').classList.remove('sheet-open');
@@ -2645,7 +2657,7 @@ function initMap(days) {
 
     // Sync stop-nav index when a popup is opened (from pin click or sidebar)
     leafletMap.on('popupopen', (e) => {
-      if (!currentNavStops.length) return;
+      if (!currentNavStops.length || _navInProgress) return;
       const marker = e.popup._source;
       // Find which stop this marker belongs to
       for (let i = 0; i < currentNavStops.length; i++) {
@@ -2831,6 +2843,7 @@ function showStopNav(day) {
 function hideStopNav() {
   currentNavStops = [];
   currentNavIdx = -1;
+  _navInProgress = false;
   document.getElementById('stop-nav')?.classList.remove('show');
 }
 
@@ -2854,6 +2867,7 @@ function navigateStop(direction) {
   }
   const item = currentNavStops[currentNavIdx];
   updateStopNavLabel();
+  _navInProgress = true;
   leafletMap.flyTo([item.stop.lat, item.stop.lng], 16, { duration: 0.6 });
   const regKey = `${item.day.id}-${item.origIdx}`;
   const mk = markerRegistry[regKey];
@@ -2864,9 +2878,13 @@ function navigateStop(direction) {
       setTimeout(() => {
         const container = mk.getPopup().getElement();
         navigateGroupedPopup(container, pageIdx);
+        _navInProgress = false;
       }, 50);
+    } else {
+      _navInProgress = false;
     }
   }, 650);
+  if (!mk) _navInProgress = false;
 }
 
 function renderMarkers(days, filterCity) {
