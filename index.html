@@ -2472,7 +2472,7 @@ function buildSidebar(days, allDays) {
     });
 
     const strip = document.getElementById('s-tabs');
-    allDays.forEach(day => {
+    days.forEach(day => {
       // Insert transit indicator between tabs when this day has transport
       if (day.transport) {
         const ind = document.createElement('span');
@@ -2492,20 +2492,17 @@ function buildSidebar(days, allDays) {
         // Tab taps fly the map to that day — sheet stays in current open/closed state
         const el = document.getElementById(`day-${day.id}`);
         if (el) {
-          const d = allDays.find(d => d.id === day.id);
-          if (d) {
-            if (sb.classList.contains('sheet-open')) {
-              // Sheet already open: expand day and scroll to it
-              toggleDay(d, el);
-              const sheetBody = sb.querySelector('.sheet-body');
-              if (sheetBody) scrollToEl(el, sheetBody);
-            } else {
-              // Sheet closed: fly map and highlight the tab
-              renderDayMarkers(d);
-              strip.querySelectorAll('.s-tab').forEach(t => { t.classList.remove('on'); t.style.color=''; t.style.borderColor=''; });
-              tab.classList.add('on'); tab.style.borderColor = c; tab.style.color = c;
-              document.getElementById('s-label').textContent = `Day ${day.id} · ${day.title}`;
-            }
+          if (sb.classList.contains('sheet-open')) {
+            // Sheet already open: expand day and scroll to it
+            toggleDay(day, el);
+            const sheetBody = sb.querySelector('.sheet-body');
+            if (sheetBody) scrollToEl(el, sheetBody);
+          } else {
+            // Sheet closed: fly map and highlight the tab
+            renderDayMarkers(day);
+            strip.querySelectorAll('.s-tab').forEach(t => { t.classList.remove('on'); t.style.color=''; t.style.borderColor=''; });
+            tab.classList.add('on'); tab.style.borderColor = c; tab.style.color = c;
+            document.getElementById('s-label').textContent = `Day ${day.id} · ${day.title}`;
           }
         }
       };
