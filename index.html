@@ -172,11 +172,22 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
 .tx-banner {
   display:flex; gap:8px; align-items:flex-start;
   background:var(--bg); border-radius:8px; padding:8px 11px;
-  margin-bottom:8px; border-left:3px solid;
+  margin-bottom:8px; border-left:3px solid; overflow:hidden;
+  cursor:pointer;
 }
 .tx-icon { font-size:15px; line-height:1.3; flex-shrink:0; }
+.tx-body { min-width:0; overflow:hidden; }
 .tx-label { font-size:13px; font-weight:600; }
-.tx-detail { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4; }
+.tx-detail { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4;
+  word-break:break-word; overflow:hidden;
+  display:grid; grid-template-rows:0fr; transition:grid-template-rows .3s ease;
+}
+.tx-detail > span { overflow:hidden; }
+.tx-banner.tx-open .tx-detail { grid-template-rows:1fr; }
+.tx-preview { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.4;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.tx-banner.tx-open .tx-preview { display:none; }
 
 /* Transit connector between days */
 .transit-conn {
@@ -451,11 +462,11 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   #day-card {
     top:12px !important; bottom:auto !important;
     right:10px !important; left:auto !important;
-    max-width:180px !important; padding:8px 10px;
+    max-width:200px !important; padding:8px 10px;
     border-radius:10px; transition:all 0.25s ease; cursor:pointer;
   }
   .dc-date { font-size:9px; }
-  .dc-title { font-size:11px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dc-title { font-size:11px; margin-top:1px; white-space:normal; word-wrap:break-word; }
   .dc-meta { font-size:10px; margin-top:2px; }
   .dc-route { font-size:9px; padding:3px 6px; margin-top:4px; }
   .dc-toggle {
@@ -483,6 +494,7 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .stop-time { font-size:12px; }
   .conn { font-size:10px; padding:2px 0; }
   .tx-label { font-size:14px; }
+  .tx-preview { font-size:13px; }
   .tx-detail { font-size:13px; }
   .transit-conn { font-size:12px; }
   .tc-route { font-size:11px; }
@@ -2542,11 +2554,12 @@ function buildSidebar(days, allDays) {
       </div>
       <div class="day-body">
         ${day.transport ? `
-          <div class="tx-banner" style="border-color:${c}60">
+          <div class="tx-banner" style="border-color:${c}60" onclick="this.classList.toggle('tx-open')">
             <span class="tx-icon">${day.transport.icon}</span>
-            <div>
+            <div class="tx-body">
               <div class="tx-label" style="color:${c}">${day.transport.route}</div>
-              <div class="tx-detail">${day.transport.detail}</div>
+              <div class="tx-preview">${day.transport.detail}</div>
+              <div class="tx-detail"><span>${day.transport.detail}</span></div>
             </div>
           </div>` : ''}
         <div class="tl">${timelineHtml}</div>
