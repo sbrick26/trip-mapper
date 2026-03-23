@@ -446,12 +446,12 @@ body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text)
   .sheet-body::-webkit-scrollbar { width:2px; }
   .sheet-body::-webkit-scrollbar-thumb { background:var(--border); }
 
-  /* ── Map overlay card: bottom-right, above stop-nav ── */
+  /* ── Map overlay card: top-right compact badge ── */
   #day-card {
-    top:auto !important; bottom:150px !important;
+    top:12px !important; bottom:auto !important;
     right:10px !important; left:auto !important;
     max-width:180px !important; padding:8px 10px;
-    border-radius:10px; transition:all 0.25s ease;
+    border-radius:10px; transition:all 0.25s ease; cursor:pointer;
   }
   .dc-date { font-size:9px; }
   .dc-title { font-size:11px; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -2994,11 +2994,15 @@ function renderDayMarkers(day) {
   card.innerHTML = `
     <div class="dc-header">
       <div class="dc-date">${day.date}</div>
-      <button class="dc-toggle" onclick="document.getElementById('day-card').classList.toggle('dc-minimized')" aria-label="Toggle day card">▾</button>
+      <button class="dc-toggle" aria-label="Toggle day card">▾</button>
     </div>
     <div class="dc-title">${day.title}</div>
     <div class="dc-meta">${pts.length} stops · ${day.city}</div>
     ${routeUrl ? `<a class="dc-route" href="${routeUrl}" target="_blank">🗺️ Full route in Google Maps</a>` : ''}`;
+  card.onclick = (e) => {
+    if (e.target.closest('a')) return; // let links work normally
+    card.classList.toggle('dc-minimized');
+  };
 
   showStopNav(day);
 }
