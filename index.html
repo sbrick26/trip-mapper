@@ -2990,7 +2990,8 @@ function renderDayMarkers(day) {
   const card = document.getElementById('day-card');
   card.style.display = 'block';
   card.style.borderLeftColor = dayColor;
-  card.classList.remove('dc-minimized');
+  if (window.innerWidth <= 768) card.classList.add('dc-minimized');
+  else card.classList.remove('dc-minimized');
   card.innerHTML = `
     <div class="dc-header">
       <div class="dc-date">${day.date}</div>
