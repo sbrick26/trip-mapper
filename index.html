@@ -2046,7 +2046,7 @@ async function submitAddStop() {
     if (!stop.lat || !stop.lng) {
       btn.textContent = 'Geocoding…';
       const fakeData = { days: [{ id: addPanelDayId, stops: [stop] }] };
-      await claudeGeocode(fakeData);
+      await hybridGeocode(fakeData);
       stop.lat = fakeData.days[0].stops[0].lat;
       stop.lng = fakeData.days[0].stops[0].lng;
     }
