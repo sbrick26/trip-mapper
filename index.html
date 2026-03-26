@@ -1337,13 +1337,24 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
 // ─── Split itinerary CSV into per-day chunks to stay under rate limits ─
 function splitCsvByDays(csvText, chunkSize = 5) {
   const lines = csvText.split('\n');
-  // Match day-header rows: weekday name (full or abbreviated) followed by a date.
-  // Date can be numeric (3/25, 4-1) or written out (March 25, Apr 10).
-  const dayPattern = /^"?(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)[,\s\-–]+(?:\d+[\/\-]\d+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s+\d+)/i;
+
+  // Extract the raw value of the first CSV column from a line
+  function firstCol(line) {
+    const t = line.trim();
+    if (t.startsWith('"')) {
+      const end = t.indexOf('"', 1);
+      return end > 0 ? t.slice(1, end) : t.slice(1);
+    }
+    return t.split(',')[0];
+  }
+
+  // A row is a STOP if its first column is a clock time ("8:00 AM") or time-of-day word.
+  // Anything non-empty that isn't a stop time is treated as a day-header row.
+  const stopRe = /^(\d{1,2}:\d{2}|Morning|Afternoon|Evening|Night|Overnight|Noon|Midday|Early|Late\b)/i;
 
   let headerLine = '';
   const dayGroups = [];
-  const matchedHeaders = []; // for diagnostics
+  const matchedHeaders = [];
   let current = null;
 
   for (const line of lines) {
@@ -1351,22 +1362,21 @@ function splitCsvByDays(csvText, chunkSize = 5) {
       if (line.toLowerCase().includes('activity')) { headerLine = line; }
       continue;
     }
-    if (dayPattern.test(line.trim())) {
+    const col = firstCol(line).trim();
+    const isDayHeader = col && !stopRe.test(col);
+
+    if (isDayHeader) {
       if (current) dayGroups.push(current);
       current = [line];
-      matchedHeaders.push(line.trim().replace(/"/g, '').split(',')[0]);
-    } else {
-      // Log any line that starts with a weekday name but didn't match the full pattern
-      if (/^"?(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(line.trim())) {
-        console.warn('[splitCsvByDays] UNMATCHED day-like line:', JSON.stringify(line.trim().slice(0, 60)));
-      }
-      if (current !== null) current.push(line);
+      matchedHeaders.push(col);
+    } else if (current !== null) {
+      current.push(line);
     }
   }
   if (current && current.length > 0) dayGroups.push(current);
   if (!dayGroups.length) return null;
 
-  console.log('[splitCsvByDays] Detected day headers (' + matchedHeaders.length + '):', matchedHeaders);
+  console.log('[splitCsvByDays] Detected', dayGroups.length, 'day headers:', matchedHeaders);
 
   const chunks = [];
   for (let i = 0; i < dayGroups.length; i += chunkSize) {
