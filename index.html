@@ -1483,7 +1483,8 @@ async function claudeParse(csv) {
   // Canonical city order matches the prompt and UI filter
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
   let tripName = 'Japan 2026';
-  let dateRange = '';
+  let startDate = '';  // pulled from chunk 0
+  let endDate   = '';  // pulled from last chunk
   const seenCities = new Set();
   const allDays = [];
 
@@ -1499,10 +1500,17 @@ async function claudeParse(csv) {
     try {
       const parsed = JSON.parse(text);
       console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
-      if (i === 0) tripName = parsed.tripName || tripName;
-      // Take dateRange from last chunk so it reflects the trip end date
-      if (i === chunks.length - 1) dateRange = parsed.dateRange || dateRange;
-      else if (i === 0) dateRange = parsed.dateRange || dateRange;
+      if (i === 0) {
+        tripName = parsed.tripName || tripName;
+        // Chunk 0 has the trip start date (left side of "Mar 25 – Mar 29")
+        const dr = parsed.dateRange || '';
+        startDate = dr.includes('–') ? dr.split('–')[0].trim() : dr;
+      }
+      if (i === chunks.length - 1) {
+        // Last chunk has the trip end date (right side of "Apr 6 – Apr 10")
+        const dr = parsed.dateRange || '';
+        endDate = dr.includes('–') ? dr.split('–')[1].trim() : dr;
+      }
       // Accumulate cities from all chunks
       (parsed.cities || []).forEach(c => seenCities.add(c));
       (parsed.days || []).forEach(day => {
@@ -1519,6 +1527,7 @@ async function claudeParse(csv) {
   // Re-number days sequentially and build merged result
   allDays.forEach((day, idx) => { day.id = idx + 1; });
   const cities = CITY_ORDER.filter(c => seenCities.has(c));
+  const dateRange = startDate && endDate ? `${startDate} – ${endDate}` : (startDate || endDate);
   console.log('[claudeParse] ✓ Total', allDays.length, 'days,', allDays.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops, cities:', cities);
   return { tripName, dateRange, cities, days: allDays };
 }
