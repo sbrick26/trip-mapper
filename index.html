@@ -1334,61 +1334,7 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
   }
 }
 
-// ─── Split itinerary CSV into per-day chunks to stay under rate limits ─
-function splitCsvByDays(csvText, chunkSize = 5) {
-  const lines = csvText.split('\n');
-
-  // Extract the raw value of the first CSV column from a line
-  function firstCol(line) {
-    const t = line.trim();
-    if (t.startsWith('"')) {
-      const end = t.indexOf('"', 1);
-      return end > 0 ? t.slice(1, end) : t.slice(1);
-    }
-    return t.split(',')[0];
-  }
-
-  // A row is a STOP if its first column is a clock time ("8:00 AM") or time-of-day word.
-  // Anything non-empty that isn't a stop time is treated as a day-header row.
-  const stopRe = /^(\d{1,2}:\d{2}|Morning|Afternoon|Evening|Night|Overnight|Noon|Midday|Early|Late\b)/i;
-
-  let headerLine = '';
-  const dayGroups = [];
-  const matchedHeaders = [];
-  let current = null;
-
-  for (const line of lines) {
-    if (!headerLine) {
-      if (line.toLowerCase().includes('activity')) { headerLine = line; }
-      continue;
-    }
-    const col = firstCol(line).trim();
-    const isDayHeader = col && !stopRe.test(col);
-
-    if (isDayHeader) {
-      if (current) dayGroups.push(current);
-      current = [line];
-      matchedHeaders.push(col);
-    } else if (current !== null) {
-      current.push(line);
-    }
-  }
-  if (current && current.length > 0) dayGroups.push(current);
-  if (!dayGroups.length) return null;
-
-  console.log('[splitCsvByDays] Detected', dayGroups.length, 'day headers:', matchedHeaders);
-
-  const chunks = [];
-  for (let i = 0; i < dayGroups.length; i += chunkSize) {
-    const slice = dayGroups.slice(i, i + chunkSize);
-    chunks.push({
-      text: (headerLine ? headerLine + '\n' : '') + slice.map(g => g.join('\n')).join('\n'),
-      dayOffset: i,
-    });
-  }
-  return { chunks, dayCount: dayGroups.length, matchedHeaders };
-}
-
+// ─── Build prompt for Claude itinerary parsing ────────────────────
 function buildParsePrompt(itineraryCsv, extraSections, dayOffset) {
   return `You are parsing a travel itinerary CSV into structured JSON for a map app.
 
@@ -1467,9 +1413,8 @@ RULES:
 }
 
 async function claudeParse(csv) {
-  // Max tokens safely under the 8,000 output tokens/min rate limit
-  const MAX_TOKENS_PER_CALL = 7000;
-  const CHUNK_SIZE = 5; // 5 days per call — balances token budget vs number of calls
+  // Must stay under the org's 8,000 output tokens/min rate limit
+  const MAX_TOKENS = 7000;
 
   const itineraryCsv = csv['Itinerary'] || '';
   const extraSections = [
@@ -1478,94 +1423,101 @@ async function claudeParse(csv) {
     (csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'') : '',
   ].filter(Boolean).join('\n');
 
-  const splitResult = splitCsvByDays(itineraryCsv, CHUNK_SIZE);
-  const chunks = splitResult ? splitResult.chunks : null;
-  const detectedDays = splitResult ? splitResult.dayCount : 0;
-  console.log('[claudeParse] splitCsvByDays:', chunks === null
-    ? 'null (no day headers found — using full CSV)'
-    : `${detectedDays} day(s) detected → ${chunks.length} chunk(s)`);
-  if (chunks) console.log('[claudeParse] Chunk 1 CSV preview:', chunks[0].text.slice(0, 300));
+  // ── Try full CSV in a single call (identical to original logic) ──
+  const prompt = buildParsePrompt(itineraryCsv, extraSections, 0);
+  const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS, (attempt, max) => {
+    setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
+  });
+  console.log('[claudeParse] Raw response length:', text.length);
 
-  // Single-chunk path (small itinerary or couldn't detect day headers)
-  // Always use original CSV here so no rows are accidentally dropped
-  if (!chunks || chunks.length === 1) {
-    if (detectedDays > 0) {
-      const h = splitResult.matchedHeaders;
-      setMsg(`Claude is reading your itinerary… (${detectedDays} days detected: ${h[0]} → ${h[h.length-1]})`);
-    }
-    const prompt = buildParsePrompt(itineraryCsv, extraSections, 0);
-    const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
-      setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
-    });
-    console.log('[claudeParse] Raw response length:', text.length);
-    console.log('[claudeParse] Raw response preview:', text.slice(0, 300));
-    try {
-      const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
-      const parsed = JSON.parse(jsonStr);
-      console.log('[claudeParse] ✓ Parsed', parsed.days?.length, 'days,', parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
-      return parsed;
-    } catch(e) {
-      console.error('[claudeParse] JSON parse failed.');
-      console.error('[claudeParse] Full raw response:', text);
-      throw new Error(`Claude returned invalid JSON: "${text.slice(0, 120)}..."`);
-    }
+  const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
+  try {
+    const parsed = JSON.parse(jsonStr);
+    console.log('[claudeParse] ✓ Single call parsed', parsed.days?.length, 'days,',
+      parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
+    return parsed;
+  } catch(singleErr) {
+    console.warn('[claudeParse] Single call JSON parse failed (likely truncated). Falling back to chunked parsing.');
+    console.warn('[claudeParse] Response preview:', text.slice(0, 200));
   }
 
-  // Multi-chunk path: process in batches of CHUNK_SIZE days
-  console.log(`[claudeParse] Processing ${chunks.length} chunks (${detectedDays} days, ${CHUNK_SIZE}/chunk)`);
+  // ── Chunked fallback: split CSV by line count, no day-detection needed ──
+  const lines = itineraryCsv.split('\n');
+  const headerLine = lines[0];
+  const dataLines = lines.slice(1).filter(l => l.trim());
+  const LINES_PER_CHUNK = 25; // ~3 days per chunk
+  const chunkCount = Math.ceil(dataLines.length / LINES_PER_CHUNK);
+  console.log(`[claudeParse] Splitting into ${chunkCount} chunks (${dataLines.length} data lines, ${LINES_PER_CHUNK}/chunk)`);
+
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
-  let tripName = 'Japan 2026';
+  let tripName = '';
   let startDate = '';
-  let endDate   = '';
+  let endDate = '';
   const seenCities = new Set();
   const allDays = [];
 
-  for (let i = 0; i < chunks.length; i++) {
-    const { text: chunkCsv, dayOffset } = chunks[i];
-    const h = splitResult.matchedHeaders;
-    setMsg(`Claude is reading your itinerary… (${detectedDays} days: ${h[0]} → ${h[h.length-1]}, part ${i + 1} of ${chunks.length})`);
-    console.log(`[claudeParse] Chunk ${i + 1}/${chunks.length} CSV preview:`, chunkCsv.slice(0, 200));
-    // Don't pass supplementary sheets to individual chunks — with only 1 day of
-    // itinerary visible, Claude tries to cram all hotels/flights into that one day,
-    // bloating the response past the token limit. The itinerary rows have all needed info.
-    const prompt = buildParsePrompt(chunkCsv, '', dayOffset);
-    const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
-      setMsg(`Claude is re-reading part ${i + 1} of ${chunks.length}... (retry ${attempt} of ${max})`);
+  for (let i = 0; i < chunkCount; i++) {
+    const start = i * LINES_PER_CHUNK;
+    const chunkLines = dataLines.slice(start, start + LINES_PER_CHUNK);
+    const chunkCsv = headerLine + '\n' + chunkLines.join('\n');
+
+    setMsg(`Claude is reading your itinerary… (part ${i + 1} of ${chunkCount})`);
+    console.log(`[claudeParse] Chunk ${i + 1}/${chunkCount} (${chunkLines.length} lines) preview:`, chunkCsv.slice(0, 200));
+
+    const chunkPrompt = buildParsePrompt(chunkCsv, i === 0 ? extraSections : '', allDays.length);
+    const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], MAX_TOKENS, (attempt, max) => {
+      setMsg(`Claude is re-reading part ${i + 1} of ${chunkCount}... (retry ${attempt} of ${max})`);
     });
-    console.log(`[claudeParse] Chunk ${i + 1} raw response length:`, text.length);
-    console.log(`[claudeParse] Chunk ${i + 1} raw response preview:`, text.slice(0, 300));
+
+    const cjson = ctext.includes('{') ? ctext.slice(ctext.indexOf('{'), ctext.lastIndexOf('}')+1) : ctext;
+    let parsed;
     try {
-      const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
-      console.log(`[claudeParse] Chunk ${i + 1} extracted JSON preview:`, jsonStr.slice(0, 200));
-      const parsed = JSON.parse(jsonStr);
-      console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
-      if (i === 0) {
-        tripName = parsed.tripName || tripName;
-        const dr = parsed.dateRange || '';
-        startDate = dr.includes('–') ? dr.split('–')[0].trim() : dr;
-      }
-      if (i === chunks.length - 1) {
-        const dr = parsed.dateRange || '';
-        endDate = dr.includes('–') ? dr.split('–')[1].trim() : dr;
-      }
-      (parsed.cities || []).forEach(c => seenCities.add(c));
-      (parsed.days || []).forEach(day => {
-        (day.cities || []).forEach(c => seenCities.add(c));
-        seenCities.add(day.city);
-      });
-      allDays.push(...(parsed.days || []));
+      parsed = JSON.parse(cjson);
     } catch(e) {
-      console.error(`[claudeParse] Chunk ${i + 1} JSON parse failed.`);
-      console.error(`[claudeParse] Chunk ${i + 1} full raw response:`, text);
-      throw new Error(`Claude returned invalid JSON on part ${i + 1}: "${text.slice(0, 120)}..."`);
+      console.error(`[claudeParse] Chunk ${i + 1} JSON parse failed. Response:`, ctext.slice(0, 300));
+      throw new Error(`Claude returned invalid JSON on part ${i + 1}: "${ctext.slice(0, 120)}..."`);
     }
+    console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
+
+    // Grab trip metadata from first/last chunks
+    if (i === 0) {
+      tripName = parsed.tripName || '';
+      const dr = parsed.dateRange || '';
+      startDate = dr.includes('–') ? dr.split('–')[0].trim() : dr;
+    }
+    if (i === chunkCount - 1) {
+      const dr = parsed.dateRange || '';
+      endDate = dr.includes('–') ? dr.split('–')[1].trim() : dr;
+    }
+
+    // Collect cities
+    (parsed.cities || []).forEach(c => seenCities.add(c));
+    (parsed.days || []).forEach(day => {
+      (day.cities || []).forEach(c => seenCities.add(c));
+      seenCities.add(day.city);
+    });
+
+    // Merge days — if a day was split across chunks, combine their stops
+    const newDays = parsed.days || [];
+    if (allDays.length > 0 && newDays.length > 0) {
+      const lastDay = allDays[allDays.length - 1];
+      const firstDay = newDays[0];
+      if (lastDay.date === firstDay.date) {
+        lastDay.stops = [...(lastDay.stops || []), ...(firstDay.stops || [])];
+        lastDay.cities = [...new Set([...(lastDay.cities || []), ...(firstDay.cities || [])])];
+        allDays.push(...newDays.slice(1));
+        continue;
+      }
+    }
+    allDays.push(...newDays);
   }
 
-  // Re-number days sequentially and build merged result
+  // Re-number days sequentially
   allDays.forEach((day, idx) => { day.id = idx + 1; });
   const cities = CITY_ORDER.filter(c => seenCities.has(c));
   const dateRange = startDate && endDate ? `${startDate} – ${endDate}` : (startDate || endDate);
-  console.log('[claudeParse] ✓ Total', allDays.length, 'days,', allDays.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops, cities:', cities);
+  console.log('[claudeParse] ✓ Total', allDays.length, 'days,',
+    allDays.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops, cities:', cities);
   return { tripName, dateRange, cities, days: allDays };
 }
 
