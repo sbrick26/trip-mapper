@@ -1496,7 +1496,10 @@ async function claudeParse(csv) {
     const { text: chunkCsv, dayOffset } = chunks[i];
     setMsg(`Claude is reading your itinerary… (part ${i + 1} of ${chunks.length})`);
     console.log(`[claudeParse] Chunk ${i + 1}/${chunks.length} CSV preview:`, chunkCsv.slice(0, 200));
-    const prompt = buildParsePrompt(chunkCsv, i === 0 ? extraSections : '', dayOffset);
+    // Don't pass supplementary sheets to individual chunks — with only 1 day of
+    // itinerary visible, Claude tries to cram all hotels/flights into that one day,
+    // bloating the response past the token limit. The itinerary rows have all needed info.
+    const prompt = buildParsePrompt(chunkCsv, '', dayOffset);
     const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
       setMsg(`Claude is re-reading part ${i + 1} of ${chunks.length}... (retry ${attempt} of ${max})`);
     });
