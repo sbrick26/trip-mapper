@@ -1461,9 +1461,9 @@ async function claudeParse(csv) {
   const chunks = splitCsvByDays(itineraryCsv, CHUNK_SIZE);
 
   // Single-chunk path (small itinerary or couldn't detect day headers)
+  // Always use original CSV here so no rows are accidentally dropped
   if (!chunks || chunks.length === 1) {
-    const csvText = chunks ? chunks[0].text : itineraryCsv;
-    const prompt = buildParsePrompt(csvText, extraSections, 0);
+    const prompt = buildParsePrompt(itineraryCsv, extraSections, 0);
     const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
       setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
     });
