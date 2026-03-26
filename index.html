@@ -1441,7 +1441,7 @@ RULES:
   "Leave Seoul" then "Arrive Narita" then "Shibuya Sky", the first stop is "seoul", the second is "tokyo",
   and the third is "tokyo". For departure airports/stations, use the city they are in (SFO → nearest city in list or destination).
 - "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
-- "detail": combine Address + Notes columns. Use \\n for line breaks.
+- "detail": combine Address + Notes columns. Use \\n for line breaks. Keep it under 120 characters — include only the most essential practical info; trim long descriptions.
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
 - Number days starting at ${dayOffset + 1}.`;
 }
