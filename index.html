@@ -1334,53 +1334,8 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
   }
 }
 
-// ─── Build prompt for Claude itinerary parsing ────────────────────
-function buildParsePrompt(itineraryCsv, extraSections, dayOffset) {
-  return `You are parsing a travel itinerary CSV into structured JSON for a map app.
-
-The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
-- Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
-- Rows with a time (like "12:40 PM", "Morning", "Afternoon") are STOPS within that day.
-- The Location column tells you which city (seoul, tokyo, fuji, kyoto, osaka, nara, or transit).
-- The Address column has specific addresses when available.
-- The Notes column has extra details, tips, and descriptions.
-- The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
-
-=== ITINERARY CSV ===
-${itineraryCsv}
-
-${extraSections}
-
-CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
-
-{
-  "tripName": "Japan 2026",
-  "dateRange": "Mar 25 – Apr 10",
-  "cities": ["seoul","tokyo","fuji","kyoto","osaka","nara"],
-  "days": [
-    {
-      "id": ${dayOffset + 1},
-      "date": "Wed, Mar 25",
-      "title": "Travel to Seoul & Explore Myeongdong",
-      "city": "seoul",
-      "cities": ["seoul"],
-      "transport": {"icon":"✈️","route":"SFO → ICN","detail":"Depart 12:40 PM, ~11h flight"},
-      "stops": [
-        {
-          "time": "12:40 PM",
-          "name": "Leave SFO",
-          "detail": "Flight to Seoul",
-          "emoji": "✈️",
-          "type": "transit",
-          "city": "seoul",
-          "geoQuery": "San Francisco International Airport SFO California USA"
-        }
-      ]
-    }
-  ]
-}
-
-RULES:
+// ─── Shared rules for Claude itinerary parsing prompts ─────────────
+const PARSE_RULES = `RULES:
 - "city": the PRIMARY city for the day. Must be one of: seoul, tokyo, fuji, kyoto, osaka, nara (lowercase).
   NEVER use "transit" as a day city. Every day must be tagged with a real destination city.
   If a day involves travel between cities, use the DESTINATION city (where the traveler ends up or spends most time).
@@ -1408,8 +1363,112 @@ RULES:
   and the third is "tokyo". For departure airports/stations, use the city they are in (SFO → nearest city in list or destination).
 - "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
 - "detail": combine Address + Notes columns. Use \\n for line breaks.
-- Include ALL stops from the CSV. Do not skip any rows that have an Activity.
-- Number days starting at ${dayOffset + 1}.`;
+- Include ALL stops from the CSV. Do not skip any rows that have an Activity.`;
+
+// ─── Build prompt for full single-call parsing ─────────────────────
+function buildParsePrompt(itineraryCsv, extraSections) {
+  return `You are parsing a travel itinerary CSV into structured JSON for a map app.
+
+The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
+- Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
+- Rows with a time (like "12:40 PM", "Morning", "Afternoon") are STOPS within that day.
+- The Location column tells you which city (seoul, tokyo, fuji, kyoto, osaka, nara, or transit).
+- The Address column has specific addresses when available.
+- The Notes column has extra details, tips, and descriptions.
+- The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
+
+=== ITINERARY CSV ===
+${itineraryCsv}
+
+${extraSections}
+
+CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
+
+{
+  "tripName": "Japan 2026",
+  "dateRange": "Mar 25 – Apr 10",
+  "cities": ["seoul","tokyo","fuji","kyoto","osaka","nara"],
+  "days": [
+    {
+      "id": 1,
+      "date": "Wed, Mar 25",
+      "title": "Travel to Seoul & Explore Myeongdong",
+      "city": "seoul",
+      "cities": ["seoul"],
+      "transport": {"icon":"✈️","route":"SFO → ICN","detail":"Depart 12:40 PM, ~11h flight"},
+      "stops": [
+        {
+          "time": "12:40 PM",
+          "name": "Leave SFO",
+          "detail": "Flight to Seoul",
+          "emoji": "✈️",
+          "type": "transit",
+          "city": "seoul",
+          "geoQuery": "San Francisco International Airport SFO California USA"
+        }
+      ]
+    }
+  ]
+}
+
+${PARSE_RULES}
+- Number days starting at 1.`;
+}
+
+// ─── Build prompt for chunked parsing (specific day range) ─────────
+function buildChunkedParsePrompt(itineraryCsv, extraSections, dayStart, dayEnd) {
+  return `You are parsing a travel itinerary CSV into structured JSON for a map app.
+
+The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
+- Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
+- Rows with a time (like "12:40 PM", "Morning", "Afternoon") are STOPS within that day.
+- The Location column tells you which city (seoul, tokyo, fuji, kyoto, osaka, nara, or transit).
+- The Address column has specific addresses when available.
+- The Notes column has extra details, tips, and descriptions.
+- The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
+
+=== FULL ITINERARY CSV ===
+${itineraryCsv}
+
+${extraSections}
+
+IMPORTANT: The CSV above contains the FULL itinerary with multiple days.
+Count the day headers in the CSV (rows with a weekday + date like "Wednesday 3/25" and no time).
+You must ONLY output days #${dayStart} through #${dayEnd} (counting from 1).
+Skip all other days entirely. If day #${dayEnd} does not exist, just output up to the last day you find.
+
+CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
+
+{
+  "tripName": "Japan 2026",
+  "dateRange": "Mar 25 – Apr 10",
+  "totalDaysFound": 17,
+  "days": [
+    {
+      "id": ${dayStart},
+      "date": "Wed, Mar 25",
+      "title": "Travel to Seoul & Explore Myeongdong",
+      "city": "seoul",
+      "cities": ["seoul"],
+      "transport": {"icon":"✈️","route":"SFO → ICN","detail":"Depart 12:40 PM, ~11h flight"},
+      "stops": [
+        {
+          "time": "12:40 PM",
+          "name": "Leave SFO",
+          "detail": "Flight to Seoul",
+          "emoji": "✈️",
+          "type": "transit",
+          "city": "seoul",
+          "geoQuery": "San Francisco International Airport SFO California USA"
+        }
+      ]
+    }
+  ]
+}
+
+${PARSE_RULES}
+- Number days with their actual ordinal position in the full itinerary (day #${dayStart} gets "id": ${dayStart}, etc.).
+- "totalDaysFound": count ALL day headers in the entire CSV (not just the ones you're outputting). This helps verify completeness.`;
 }
 
 async function claudeParse(csv) {
@@ -1424,7 +1483,7 @@ async function claudeParse(csv) {
   ].filter(Boolean).join('\n');
 
   // ── Try full CSV in a single call (identical to original logic) ──
-  const prompt = buildParsePrompt(itineraryCsv, extraSections, 0);
+  const prompt = buildParsePrompt(itineraryCsv, extraSections);
   const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS, (attempt, max) => {
     setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
   });
@@ -1437,36 +1496,40 @@ async function claudeParse(csv) {
       parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
     return parsed;
   } catch(singleErr) {
-    console.warn('[claudeParse] Single call JSON parse failed (likely truncated). Falling back to chunked parsing.');
+    console.warn('[claudeParse] Single call JSON parse failed (likely truncated). Falling back to day-by-day chunked parsing.');
     console.warn('[claudeParse] Response preview:', text.slice(0, 200));
   }
 
-  // ── Chunked fallback: split CSV by line count, no day-detection needed ──
-  const lines = itineraryCsv.split('\n');
-  const headerLine = lines[0];
-  const dataLines = lines.slice(1).filter(l => l.trim());
-  const LINES_PER_CHUNK = 25; // ~3 days per chunk
-  const chunkCount = Math.ceil(dataLines.length / LINES_PER_CHUNK);
-  console.log(`[claudeParse] Splitting into ${chunkCount} chunks (${dataLines.length} data lines, ${LINES_PER_CHUNK}/chunk)`);
-
+  // ── Chunked fallback: send full CSV, parse 5 days at a time ──
+  // Each call gets the ENTIRE CSV so Claude has full context, but is told
+  // to only output a specific range of days. No day-detection or line-splitting
+  // needed — Claude counts day headers itself. Days are never split across calls.
+  const DAYS_PER_CHUNK = 5;
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
   let tripName = '';
-  let startDate = '';
-  let endDate = '';
+  let dateRange = '';
+  let totalDaysFound = 0;
   const seenCities = new Set();
   const allDays = [];
 
-  for (let i = 0; i < chunkCount; i++) {
-    const start = i * LINES_PER_CHUNK;
-    const chunkLines = dataLines.slice(start, start + LINES_PER_CHUNK);
-    const chunkCsv = headerLine + '\n' + chunkLines.join('\n');
+  // First chunk: days 1-5 (also gives us totalDaysFound and trip metadata)
+  let dayStart = 1;
+  let chunkNum = 0;
 
-    setMsg(`Claude is reading your itinerary… (part ${i + 1} of ${chunkCount})`);
-    console.log(`[claudeParse] Chunk ${i + 1}/${chunkCount} (${chunkLines.length} lines) preview:`, chunkCsv.slice(0, 200));
+  while (true) {
+    chunkNum++;
+    const dayEnd = dayStart + DAYS_PER_CHUNK - 1;
+    setMsg(`Claude is reading your itinerary… (days ${dayStart}–${dayEnd})`);
+    console.log(`[claudeParse] Chunk ${chunkNum}: requesting days ${dayStart}–${dayEnd}`);
 
-    const chunkPrompt = buildParsePrompt(chunkCsv, i === 0 ? extraSections : '', allDays.length);
+    const chunkPrompt = buildChunkedParsePrompt(
+      itineraryCsv,
+      extraSections,
+      dayStart,
+      dayEnd
+    );
     const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], MAX_TOKENS, (attempt, max) => {
-      setMsg(`Claude is re-reading part ${i + 1} of ${chunkCount}... (retry ${attempt} of ${max})`);
+      setMsg(`Claude is re-reading days ${dayStart}–${dayEnd}... (retry ${attempt} of ${max})`);
     });
 
     const cjson = ctext.includes('{') ? ctext.slice(ctext.indexOf('{'), ctext.lastIndexOf('}')+1) : ctext;
@@ -1474,48 +1537,48 @@ async function claudeParse(csv) {
     try {
       parsed = JSON.parse(cjson);
     } catch(e) {
-      console.error(`[claudeParse] Chunk ${i + 1} JSON parse failed. Response:`, ctext.slice(0, 300));
-      throw new Error(`Claude returned invalid JSON on part ${i + 1}: "${ctext.slice(0, 120)}..."`);
+      console.error(`[claudeParse] Chunk ${chunkNum} JSON parse failed. Response:`, ctext.slice(0, 300));
+      throw new Error(`Claude returned invalid JSON for days ${dayStart}–${dayEnd}: "${ctext.slice(0, 120)}..."`);
     }
-    console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
 
-    // Grab trip metadata from first/last chunks
-    if (i === 0) {
+    const chunkDays = parsed.days || [];
+    console.log(`[claudeParse] Chunk ${chunkNum} ✓ got ${chunkDays.length} days (ids: ${chunkDays.map(d=>d.id).join(',')})`);
+
+    // Grab totalDaysFound from first chunk to know when to stop
+    if (chunkNum === 1) {
+      totalDaysFound = parsed.totalDaysFound || 0;
       tripName = parsed.tripName || '';
-      const dr = parsed.dateRange || '';
-      startDate = dr.includes('–') ? dr.split('–')[0].trim() : dr;
-    }
-    if (i === chunkCount - 1) {
-      const dr = parsed.dateRange || '';
-      endDate = dr.includes('–') ? dr.split('–')[1].trim() : dr;
+      dateRange = parsed.dateRange || '';
+      console.log(`[claudeParse] Claude reports ${totalDaysFound} total days in CSV`);
     }
 
-    // Collect cities
-    (parsed.cities || []).forEach(c => seenCities.add(c));
-    (parsed.days || []).forEach(day => {
+    // Collect cities from this chunk
+    chunkDays.forEach(day => {
       (day.cities || []).forEach(c => seenCities.add(c));
-      seenCities.add(day.city);
+      if (day.city) seenCities.add(day.city);
     });
 
-    // Merge days — if a day was split across chunks, combine their stops
-    const newDays = parsed.days || [];
-    if (allDays.length > 0 && newDays.length > 0) {
-      const lastDay = allDays[allDays.length - 1];
-      const firstDay = newDays[0];
-      if (lastDay.date === firstDay.date) {
-        lastDay.stops = [...(lastDay.stops || []), ...(firstDay.stops || [])];
-        lastDay.cities = [...new Set([...(lastDay.cities || []), ...(firstDay.cities || [])])];
-        allDays.push(...newDays.slice(1));
-        continue;
-      }
+    // Simply append — days are never split across chunks
+    allDays.push(...chunkDays);
+
+    // Determine if we need another chunk
+    const maxDay = Math.max(totalDaysFound, ...chunkDays.map(d => d.id || 0));
+    dayStart = dayEnd + 1;
+
+    if (chunkDays.length === 0 || dayStart > maxDay) {
+      break; // No more days to fetch
     }
-    allDays.push(...newDays);
+
+    // Safety: don't loop forever (max ~10 chunks for 50 days)
+    if (chunkNum >= 10) {
+      console.warn('[claudeParse] Hit max chunk limit (10). Stopping.');
+      break;
+    }
   }
 
-  // Re-number days sequentially
+  // Re-number days sequentially to ensure clean 1,2,3... ordering
   allDays.forEach((day, idx) => { day.id = idx + 1; });
   const cities = CITY_ORDER.filter(c => seenCities.has(c));
-  const dateRange = startDate && endDate ? `${startDate} – ${endDate}` : (startDate || endDate);
   console.log('[claudeParse] ✓ Total', allDays.length, 'days,',
     allDays.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops, cities:', cities);
   return { tripName, dateRange, cities, days: allDays };
