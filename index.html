@@ -1337,12 +1337,13 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
 // ─── Split itinerary CSV into per-day chunks to stay under rate limits ─
 function splitCsvByDays(csvText, chunkSize = 5) {
   const lines = csvText.split('\n');
-  // Support full and abbreviated weekday names (Mon/Monday etc.) and common separators
-  // between the day name and date: space, comma, dash, en-dash
-  const dayPattern = /^"?(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)[,\s\-–]+\d+[\/\-]\d+/i;
+  // Match day-header rows: weekday name (full or abbreviated) followed by a date.
+  // Date can be numeric (3/25, 4-1) or written out (March 25, Apr 10).
+  const dayPattern = /^"?(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)[,\s\-–]+(?:\d+[\/\-]\d+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s+\d+)/i;
 
   let headerLine = '';
   const dayGroups = [];
+  const matchedHeaders = []; // for diagnostics
   let current = null;
 
   for (const line of lines) {
@@ -1353,12 +1354,19 @@ function splitCsvByDays(csvText, chunkSize = 5) {
     if (dayPattern.test(line.trim())) {
       if (current) dayGroups.push(current);
       current = [line];
-    } else if (current !== null) {
-      current.push(line);
+      matchedHeaders.push(line.trim().replace(/"/g, '').split(',')[0]);
+    } else {
+      // Log any line that starts with a weekday name but didn't match the full pattern
+      if (/^"?(Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(line.trim())) {
+        console.warn('[splitCsvByDays] UNMATCHED day-like line:', JSON.stringify(line.trim().slice(0, 60)));
+      }
+      if (current !== null) current.push(line);
     }
   }
   if (current && current.length > 0) dayGroups.push(current);
   if (!dayGroups.length) return null;
+
+  console.log('[splitCsvByDays] Detected day headers (' + matchedHeaders.length + '):', matchedHeaders);
 
   const chunks = [];
   for (let i = 0; i < dayGroups.length; i += chunkSize) {
@@ -1368,7 +1376,7 @@ function splitCsvByDays(csvText, chunkSize = 5) {
       dayOffset: i,
     });
   }
-  return { chunks, dayCount: dayGroups.length };
+  return { chunks, dayCount: dayGroups.length, matchedHeaders };
 }
 
 function buildParsePrompt(itineraryCsv, extraSections, dayOffset) {
@@ -1471,7 +1479,10 @@ async function claudeParse(csv) {
   // Single-chunk path (small itinerary or couldn't detect day headers)
   // Always use original CSV here so no rows are accidentally dropped
   if (!chunks || chunks.length === 1) {
-    if (detectedDays > 0) setMsg(`Claude is reading your itinerary… (${detectedDays} days detected, 1 part)`);
+    if (detectedDays > 0) {
+      const h = splitResult.matchedHeaders;
+      setMsg(`Claude is reading your itinerary… (${detectedDays} days detected: ${h[0]} → ${h[h.length-1]})`);
+    }
     const prompt = buildParsePrompt(itineraryCsv, extraSections, 0);
     const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
       setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
@@ -1501,7 +1512,8 @@ async function claudeParse(csv) {
 
   for (let i = 0; i < chunks.length; i++) {
     const { text: chunkCsv, dayOffset } = chunks[i];
-    setMsg(`Claude is reading your itinerary… (${detectedDays} days, part ${i + 1} of ${chunks.length})`);
+    const h = splitResult.matchedHeaders;
+    setMsg(`Claude is reading your itinerary… (${detectedDays} days: ${h[0]} → ${h[h.length-1]}, part ${i + 1} of ${chunks.length})`);
     console.log(`[claudeParse] Chunk ${i + 1}/${chunks.length} CSV preview:`, chunkCsv.slice(0, 200));
     // Don't pass supplementary sheets to individual chunks — with only 1 day of
     // itinerary visible, Claude tries to cram all hotels/flights into that one day,
