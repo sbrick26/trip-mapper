@@ -1449,7 +1449,7 @@ RULES:
 async function claudeParse(csv) {
   // Max tokens safely under the 8,000 output tokens/min rate limit
   const MAX_TOKENS_PER_CALL = 7000;
-  const CHUNK_SIZE = 2; // days per API call — keeps output well under the 8k token/min rate limit
+  const CHUNK_SIZE = 1; // 1 day per call — most reliable for dense itineraries
 
   const itineraryCsv = csv['Itinerary'] || '';
   const extraSections = [
@@ -1469,7 +1469,8 @@ async function claudeParse(csv) {
     });
     console.log('[claudeParse] Raw response length:', text.length);
     try {
-      const parsed = JSON.parse(text);
+      const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
+      const parsed = JSON.parse(jsonStr);
       console.log('[claudeParse] ✓ Parsed', parsed.days?.length, 'days,', parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
       return parsed;
     } catch(e) {
@@ -1498,7 +1499,8 @@ async function claudeParse(csv) {
     });
     console.log(`[claudeParse] Chunk ${i + 1} response length:`, text.length);
     try {
-      const parsed = JSON.parse(text);
+      const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
+      const parsed = JSON.parse(jsonStr);
       console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
       if (i === 0) {
         tripName = parsed.tripName || tripName;
