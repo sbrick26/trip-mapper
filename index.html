@@ -1414,7 +1414,7 @@ RULES:
 
 async function claudeParse(csv) {
   // Must stay under the org's 8,000 output tokens/min rate limit
-  const MAX_TOKENS = 7000;
+  const MAX_TOKENS = 7999;
 
   const itineraryCsv = csv['Itinerary'] || '';
   const extraSections = [
