@@ -1334,8 +1334,43 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
   }
 }
 
-async function claudeParse(csv) {
-  const prompt = `You are parsing a travel itinerary CSV into structured JSON for a map app.
+// ─── Split itinerary CSV into per-day chunks to stay under rate limits ─
+function splitCsvByDays(csvText, chunkSize = 5) {
+  const lines = csvText.split('\n');
+  const dayPattern = /^"?(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+\d+\/\d+/i;
+
+  let headerLine = '';
+  const dayGroups = [];
+  let current = null;
+
+  for (const line of lines) {
+    if (!headerLine) {
+      if (line.toLowerCase().includes('activity')) { headerLine = line; }
+      continue;
+    }
+    if (dayPattern.test(line.trim())) {
+      if (current) dayGroups.push(current);
+      current = [line];
+    } else if (current !== null) {
+      current.push(line);
+    }
+  }
+  if (current && current.length > 0) dayGroups.push(current);
+  if (!dayGroups.length) return null;
+
+  const chunks = [];
+  for (let i = 0; i < dayGroups.length; i += chunkSize) {
+    const slice = dayGroups.slice(i, i + chunkSize);
+    chunks.push({
+      text: (headerLine ? headerLine + '\n' : '') + slice.map(g => g.join('\n')).join('\n'),
+      dayOffset: i,
+    });
+  }
+  return chunks;
+}
+
+function buildParsePrompt(itineraryCsv, extraSections, dayOffset) {
+  return `You are parsing a travel itinerary CSV into structured JSON for a map app.
 
 The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
 - Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
@@ -1346,11 +1381,9 @@ The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Add
 - The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
 
 === ITINERARY CSV ===
-${csv['Itinerary']||''}
+${itineraryCsv}
 
-${(csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'') : ''}
-${(csv['Hotels']||'').length > 30 ? '=== HOTELS ===\n' + (csv['Hotels']||'') : ''}
-${(csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'') : ''}
+${extraSections}
 
 CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
 
@@ -1360,7 +1393,7 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
   "cities": ["seoul","tokyo","fuji","kyoto","osaka","nara"],
   "days": [
     {
-      "id": 1,
+      "id": ${dayOffset + 1},
       "date": "Wed, Mar 25",
       "title": "Travel to Seoul & Explore Myeongdong",
       "city": "seoul",
@@ -1410,21 +1443,84 @@ RULES:
 - "emoji": pick a relevant one (✈️🚄🚌🏨⛩️🌸🍜🛍️🎨🏯🎮🏟️🌅🦌🐒🛶🎋🗻🍻🍣🎵🚶)
 - "detail": combine Address + Notes columns. Use \\n for line breaks.
 - Include ALL stops from the CSV. Do not skip any rows that have an Activity.
-- Number days sequentially starting at 1.`;
+- Number days starting at ${dayOffset + 1}.`;
+}
 
-  const text = await claudeCall([{ role:'user', content:prompt }], 32000, (attempt, max) => {
-    setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
-  });
-  console.log('[claudeParse] Raw response length:', text.length);
-  console.log('[claudeParse] First 200 chars:', text.slice(0, 200));
-  try {
-    const parsed = JSON.parse(text);
-    console.log('[claudeParse] ✓ Parsed', parsed.days?.length, 'days,', parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
-    return parsed;
-  } catch(e) {
-    console.error('[claudeParse] JSON parse failed. Raw text:', text.slice(0, 500));
-    throw new Error('Claude returned invalid JSON. Check console for details.');
+async function claudeParse(csv) {
+  // Max tokens safely under the 8,000 output tokens/min rate limit
+  const MAX_TOKENS_PER_CALL = 7000;
+  const CHUNK_SIZE = 5; // days per API call
+
+  const itineraryCsv = csv['Itinerary'] || '';
+  const extraSections = [
+    (csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'') : '',
+    (csv['Hotels']||'').length > 30 ? '=== HOTELS ===\n' + (csv['Hotels']||'') : '',
+    (csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'') : '',
+  ].filter(Boolean).join('\n');
+
+  const chunks = splitCsvByDays(itineraryCsv, CHUNK_SIZE);
+
+  // Single-chunk path (small itinerary or couldn't detect day headers)
+  if (!chunks || chunks.length === 1) {
+    const csvText = chunks ? chunks[0].text : itineraryCsv;
+    const prompt = buildParsePrompt(csvText, extraSections, 0);
+    const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
+      setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
+    });
+    console.log('[claudeParse] Raw response length:', text.length);
+    try {
+      const parsed = JSON.parse(text);
+      console.log('[claudeParse] ✓ Parsed', parsed.days?.length, 'days,', parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
+      return parsed;
+    } catch(e) {
+      console.error('[claudeParse] JSON parse failed. Raw text:', text.slice(0, 500));
+      throw new Error('Claude returned invalid JSON. Check console for details.');
+    }
   }
+
+  // Multi-chunk path: process in batches of CHUNK_SIZE days
+  console.log(`[claudeParse] Large itinerary — processing in ${chunks.length} chunks of ${CHUNK_SIZE} days`);
+  // Canonical city order matches the prompt and UI filter
+  const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
+  let tripName = 'Japan 2026';
+  let dateRange = '';
+  const seenCities = new Set();
+  const allDays = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const { text: chunkCsv, dayOffset } = chunks[i];
+    setMsg(`Claude is reading your itinerary… (part ${i + 1} of ${chunks.length})`);
+    // Only send supplementary sheets with the first chunk
+    const prompt = buildParsePrompt(chunkCsv, i === 0 ? extraSections : '', dayOffset);
+    const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS_PER_CALL, (attempt, max) => {
+      setMsg(`Claude is re-reading part ${i + 1} of ${chunks.length}... (retry ${attempt} of ${max})`);
+    });
+    console.log(`[claudeParse] Chunk ${i + 1} response length:`, text.length);
+    try {
+      const parsed = JSON.parse(text);
+      console.log(`[claudeParse] Chunk ${i + 1} ✓`, parsed.days?.length, 'days');
+      if (i === 0) tripName = parsed.tripName || tripName;
+      // Take dateRange from last chunk so it reflects the trip end date
+      if (i === chunks.length - 1) dateRange = parsed.dateRange || dateRange;
+      else if (i === 0) dateRange = parsed.dateRange || dateRange;
+      // Accumulate cities from all chunks
+      (parsed.cities || []).forEach(c => seenCities.add(c));
+      (parsed.days || []).forEach(day => {
+        (day.cities || []).forEach(c => seenCities.add(c));
+        seenCities.add(day.city);
+      });
+      allDays.push(...(parsed.days || []));
+    } catch(e) {
+      console.error(`[claudeParse] Chunk ${i + 1} JSON parse failed:`, text.slice(0, 500));
+      throw new Error(`Claude returned invalid JSON on part ${i + 1}. Check console for details.`);
+    }
+  }
+
+  // Re-number days sequentially and build merged result
+  allDays.forEach((day, idx) => { day.id = idx + 1; });
+  const cities = CITY_ORDER.filter(c => seenCities.has(c));
+  console.log('[claudeParse] ✓ Total', allDays.length, 'days,', allDays.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops, cities:', cities);
+  return { tripName, dateRange, cities, days: allDays };
 }
 
 // ─── Claude: geocode all stops ────────────────────────────────────
