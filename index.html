@@ -1472,9 +1472,6 @@ ${PARSE_RULES}
 }
 
 async function claudeParse(csv) {
-  // Must stay under the org's 8,000 output tokens/min rate limit
-  const MAX_TOKENS = 7999;
-
   const itineraryCsv = csv['Itinerary'] || '';
   const extraSections = [
     (csv['Transportation']||'').length > 30 ? '=== TRANSPORTATION ===\n' + (csv['Transportation']||'') : '',
@@ -1482,43 +1479,64 @@ async function claudeParse(csv) {
     (csv['Flights']||'').length > 30 ? '=== FLIGHTS ===\n' + (csv['Flights']||'') : '',
   ].filter(Boolean).join('\n');
 
-  // ── Try full CSV in a single call (identical to original logic) ──
-  const prompt = buildParsePrompt(itineraryCsv, extraSections);
-  const text = await claudeCall([{ role:'user', content:prompt }], MAX_TOKENS, (attempt, max) => {
-    setMsg(`Claude is re-reading your itinerary... (retry ${attempt} of ${max})`);
-  });
-  console.log('[claudeParse] Raw response length:', text.length);
+  // ── For small itineraries, try a single call ──
+  // Only attempt if CSV is small enough that output will fit in one response.
+  // Large CSVs (>10K chars, ~8+ days) will exceed the token limit, so skip
+  // straight to chunked to avoid wasting rate-limit budget.
+  if (itineraryCsv.length <= 10000) {
+    const prompt = buildParsePrompt(itineraryCsv, extraSections);
+    const text = await claudeCall([{ role:'user', content:prompt }], 7999, (attempt, max) => {
+      setMsg(`Claude is reading your itinerary... (retry ${attempt} of ${max})`);
+    });
+    console.log('[claudeParse] Single-call response length:', text.length);
 
-  const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
-  try {
-    const parsed = JSON.parse(jsonStr);
-    console.log('[claudeParse] ✓ Single call parsed', parsed.days?.length, 'days,',
-      parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
-    return parsed;
-  } catch(singleErr) {
-    console.warn('[claudeParse] Single call JSON parse failed (likely truncated). Falling back to day-by-day chunked parsing.');
-    console.warn('[claudeParse] Response preview:', text.slice(0, 200));
+    const jsonStr = text.includes('{') ? text.slice(text.indexOf('{'), text.lastIndexOf('}')+1) : text;
+    try {
+      const parsed = JSON.parse(jsonStr);
+      console.log('[claudeParse] ✓ Single call parsed', parsed.days?.length, 'days,',
+        parsed.days?.reduce((n,d)=>n+(d.stops?.length||0),0), 'total stops');
+      return parsed;
+    } catch(singleErr) {
+      console.warn('[claudeParse] Single call JSON parse failed (truncated). Falling back to chunked.');
+    }
+  } else {
+    console.log(`[claudeParse] Large itinerary (${itineraryCsv.length} chars), using chunked parsing directly.`);
   }
 
-  // ── Chunked fallback: send full CSV, parse 5 days at a time ──
-  // Each call gets the ENTIRE CSV so Claude has full context, but is told
-  // to only output a specific range of days. No day-detection or line-splitting
-  // needed — Claude counts day headers itself. Days are never split across calls.
-  const DAYS_PER_CHUNK = 5;
+  // ── Chunked parsing: 3 days per call, full CSV context each time ──
+  // Each call sends the ENTIRE CSV so Claude sees full context, but is told
+  // to only output a specific range of days. Claude counts day headers itself.
+  // Days are never split across calls — just concatenate the arrays.
+  //
+  // Rate limit: org allows 8,000 output tokens/min. We use max_tokens=2500
+  // per chunk, so 3 chunks = 7,500 tokens before needing to pause.
+  const DAYS_PER_CHUNK = 3;
+  const CHUNK_MAX_TOKENS = 2500;
+  const CHUNKS_PER_WINDOW = 3;   // 3 × 2500 = 7500, under 8000/min limit
+  const RATE_LIMIT_PAUSE_MS = 61000; // 61s to ensure the minute window resets
+
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
   let tripName = '';
   let dateRange = '';
   let totalDaysFound = 0;
   const seenCities = new Set();
   const allDays = [];
-
-  // First chunk: days 1-5 (also gives us totalDaysFound and trip metadata)
   let dayStart = 1;
   let chunkNum = 0;
 
   while (true) {
     chunkNum++;
     const dayEnd = dayStart + DAYS_PER_CHUNK - 1;
+
+    // Rate limit pacing: pause before every new window of 3 chunks
+    // (skip the pause before the very first window)
+    if (chunkNum > 1 && (chunkNum - 1) % CHUNKS_PER_WINDOW === 0) {
+      const pauseSec = Math.round(RATE_LIMIT_PAUSE_MS / 1000);
+      console.log(`[claudeParse] Rate limit pause: waiting ${pauseSec}s for token budget to reset...`);
+      setMsg(`Waiting ${pauseSec}s for rate limit to reset…`);
+      await new Promise(r => setTimeout(r, RATE_LIMIT_PAUSE_MS));
+    }
+
     setMsg(`Claude is reading your itinerary… (days ${dayStart}–${dayEnd})`);
     console.log(`[claudeParse] Chunk ${chunkNum}: requesting days ${dayStart}–${dayEnd}`);
 
@@ -1528,7 +1546,7 @@ async function claudeParse(csv) {
       dayStart,
       dayEnd
     );
-    const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], MAX_TOKENS, (attempt, max) => {
+    const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], CHUNK_MAX_TOKENS, (attempt, max) => {
       setMsg(`Claude is re-reading days ${dayStart}–${dayEnd}... (retry ${attempt} of ${max})`);
     });
 
@@ -1544,7 +1562,7 @@ async function claudeParse(csv) {
     const chunkDays = parsed.days || [];
     console.log(`[claudeParse] Chunk ${chunkNum} ✓ got ${chunkDays.length} days (ids: ${chunkDays.map(d=>d.id).join(',')})`);
 
-    // Grab totalDaysFound from first chunk to know when to stop
+    // Grab totalDaysFound + metadata from first chunk
     if (chunkNum === 1) {
       totalDaysFound = parsed.totalDaysFound || 0;
       tripName = parsed.tripName || '';
@@ -1552,13 +1570,13 @@ async function claudeParse(csv) {
       console.log(`[claudeParse] Claude reports ${totalDaysFound} total days in CSV`);
     }
 
-    // Collect cities from this chunk
+    // Collect cities
     chunkDays.forEach(day => {
       (day.cities || []).forEach(c => seenCities.add(c));
       if (day.city) seenCities.add(day.city);
     });
 
-    // Simply append — days are never split across chunks
+    // Append — days are never split across chunks
     allDays.push(...chunkDays);
 
     // Determine if we need another chunk
@@ -1566,17 +1584,17 @@ async function claudeParse(csv) {
     dayStart = dayEnd + 1;
 
     if (chunkDays.length === 0 || dayStart > maxDay) {
-      break; // No more days to fetch
+      break;
     }
 
-    // Safety: don't loop forever (max ~10 chunks for 50 days)
-    if (chunkNum >= 10) {
-      console.warn('[claudeParse] Hit max chunk limit (10). Stopping.');
+    // Safety: max 20 chunks (60 days)
+    if (chunkNum >= 20) {
+      console.warn('[claudeParse] Hit max chunk limit (20). Stopping.');
       break;
     }
   }
 
-  // Re-number days sequentially to ensure clean 1,2,3... ordering
+  // Re-number days sequentially
   allDays.forEach((day, idx) => { day.id = idx + 1; });
   const cities = CITY_ORDER.filter(c => seenCities.has(c));
   console.log('[claudeParse] ✓ Total', allDays.length, 'days,',
