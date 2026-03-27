@@ -1503,17 +1503,12 @@ async function claudeParse(csv) {
     console.log(`[claudeParse] Large itinerary (${itineraryCsv.length} chars), using chunked parsing directly.`);
   }
 
-  // ── Chunked parsing: 3 days per call, full CSV context each time ──
-  // Each call sends the ENTIRE CSV so Claude sees full context, but is told
-  // to only output a specific range of days. Claude counts day headers itself.
-  // Days are never split across calls — just concatenate the arrays.
-  //
-  // Rate limit: org allows 8,000 output tokens/min. We use max_tokens=2500
-  // per chunk, so 3 chunks = 7,500 tokens before needing to pause.
-  const DAYS_PER_CHUNK = 3;
-  const CHUNK_MAX_TOKENS = 2500;
-  const CHUNKS_PER_WINDOW = 3;   // 3 × 2500 = 7500, under 8000/min limit
-  const RATE_LIMIT_PAUSE_MS = 61000; // 61s to ensure the minute window resets
+  // ── Chunked parsing: 1 day per call, full CSV context each time ──
+  // Sends the ENTIRE CSV each call but tells Claude to output only one day.
+  // A single day with 10+ stops needs ~1500-2000 tokens; max_tokens=5000
+  // gives plenty of headroom and is safely under the 8000/request hard limit.
+  const DAYS_PER_CHUNK = 1;
+  const CHUNK_MAX_TOKENS = 5000;
 
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
   let tripName = '';
@@ -1528,17 +1523,8 @@ async function claudeParse(csv) {
     chunkNum++;
     const dayEnd = dayStart + DAYS_PER_CHUNK - 1;
 
-    // Rate limit pacing: pause before every new window of 3 chunks
-    // (skip the pause before the very first window)
-    if (chunkNum > 1 && (chunkNum - 1) % CHUNKS_PER_WINDOW === 0) {
-      const pauseSec = Math.round(RATE_LIMIT_PAUSE_MS / 1000);
-      console.log(`[claudeParse] Rate limit pause: waiting ${pauseSec}s for token budget to reset...`);
-      setMsg(`Waiting ${pauseSec}s for rate limit to reset…`);
-      await new Promise(r => setTimeout(r, RATE_LIMIT_PAUSE_MS));
-    }
-
-    setMsg(`Claude is reading your itinerary… (days ${dayStart}–${dayEnd})`);
-    console.log(`[claudeParse] Chunk ${chunkNum}: requesting days ${dayStart}–${dayEnd}`);
+    setMsg(`Claude is reading your itinerary… (day ${dayStart} of ${totalDaysFound || '?'})`);
+    console.log(`[claudeParse] Chunk ${chunkNum}: requesting day ${dayStart}`);
 
     const chunkPrompt = buildChunkedParsePrompt(
       itineraryCsv,
@@ -1547,20 +1533,22 @@ async function claudeParse(csv) {
       dayEnd
     );
     const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], CHUNK_MAX_TOKENS, (attempt, max) => {
-      setMsg(`Claude is re-reading days ${dayStart}–${dayEnd}... (retry ${attempt} of ${max})`);
+      setMsg(`Claude is re-reading day ${dayStart}... (retry ${attempt} of ${max})`);
     });
+
+    console.log(`[claudeParse] Chunk ${chunkNum} raw (${ctext.length} chars):`, ctext);
 
     const cjson = ctext.includes('{') ? ctext.slice(ctext.indexOf('{'), ctext.lastIndexOf('}')+1) : ctext;
     let parsed;
     try {
       parsed = JSON.parse(cjson);
     } catch(e) {
-      console.error(`[claudeParse] Chunk ${chunkNum} JSON parse failed. Response:`, ctext.slice(0, 300));
-      throw new Error(`Claude returned invalid JSON for days ${dayStart}–${dayEnd}: "${ctext.slice(0, 120)}..."`);
+      console.error(`[claudeParse] Chunk ${chunkNum} JSON parse FAILED. Full response:`, ctext);
+      throw new Error(`Claude returned invalid JSON for day ${dayStart}: "${ctext.slice(0, 120)}..."`);
     }
 
     const chunkDays = parsed.days || [];
-    console.log(`[claudeParse] Chunk ${chunkNum} ✓ got ${chunkDays.length} days (ids: ${chunkDays.map(d=>d.id).join(',')})`);
+    console.log(`[claudeParse] Chunk ${chunkNum} ✓ parsed days:`, JSON.stringify(chunkDays, null, 2));
 
     // Grab totalDaysFound + metadata from first chunk
     if (chunkNum === 1) {
@@ -1587,9 +1575,9 @@ async function claudeParse(csv) {
       break;
     }
 
-    // Safety: max 20 chunks (60 days)
-    if (chunkNum >= 20) {
-      console.warn('[claudeParse] Hit max chunk limit (20). Stopping.');
+    // Safety: max 50 chunks
+    if (chunkNum >= 50) {
+      console.warn('[claudeParse] Hit max chunk limit (50). Stopping.');
       break;
     }
   }
