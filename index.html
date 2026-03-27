@@ -1419,37 +1419,47 @@ ${PARSE_RULES}
 - Number days starting at 1.`;
 }
 
-// ─── Build prompt for chunked parsing (specific day range) ─────────
-function buildChunkedParsePrompt(itineraryCsv, extraSections, dayStart, dayEnd) {
-  return `You are parsing a travel itinerary CSV into structured JSON for a map app.
+// ─── Build prompt: inventory of all day headers ────────────────────
+function buildDayInventoryPrompt(itineraryCsv) {
+  return `You are analyzing a travel itinerary CSV. The first column ("Date & Time") contains either:
+- Day header rows: a weekday + date like "Wednesday 3/25" or "Thursday 3/26" (NO time)
+- Stop rows: a time like "10:00 AM", "Morning", "2/3:00 AM"
+
+=== ITINERARY CSV ===
+${itineraryCsv}
+
+List EVERY day header row you find, in the order they appear. Include all of them — do not skip any.
+
+Return ONLY a raw JSON array, no markdown, no explanation:
+[
+  {"n":1,"header":"Wednesday 3/25"},
+  {"n":2,"header":"Thursday 3/26"}
+]`;
+}
+
+// ─── Build prompt: parse one specific day by its header text ────────
+function buildSingleDayParsePrompt(itineraryCsv, dayHeader, dayNum, totalDays, extraSections) {
+  return `You are parsing ONE specific day from a travel itinerary CSV into structured JSON for a map app.
 
 The CSV has columns: Date & Time, Activity, Transportation, Location, Notes, Address.
-- Rows with a weekday + date (like "Wednesday 3/25") and no time mark the start of a NEW DAY.
-- Rows with a time (like "12:40 PM", "Morning", "Afternoon") are STOPS within that day.
-- The Location column tells you which city (seoul, tokyo, fuji, kyoto, osaka, nara, or transit).
-- The Address column has specific addresses when available.
-- The Notes column has extra details, tips, and descriptions.
-- The Transportation column has transport info when relevant (e.g. "Shinkansen", "Fuji-Excursion 93").
+- Day header rows have a weekday + date in the first column (no time), like "Wednesday 3/25".
+- Stop rows have a time in the first column like "10:00 AM", "Morning", "Afternoon".
 
 === FULL ITINERARY CSV ===
 ${itineraryCsv}
 
 ${extraSections}
 
-IMPORTANT: The CSV above contains the FULL itinerary with multiple days.
-Count the day headers in the CSV (rows with a weekday + date like "Wednesday 3/25" and no time).
-You must ONLY output days #${dayStart} through #${dayEnd} (counting from 1).
-Skip all other days entirely. If day #${dayEnd} does not exist, just output up to the last day you find.
+IMPORTANT: Find the day whose header row in the first column is exactly (or very close to): "${dayHeader}"
+Parse ALL stop rows that follow that header, up to (but NOT including) the next day header row.
+This is day #${dayNum} of ${totalDays} total days.
 
 CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Start with { and end with }.
 
 {
-  "tripName": "Japan 2026",
-  "dateRange": "Mar 25 – Apr 10",
-  "totalDaysFound": 17,
   "days": [
     {
-      "id": ${dayStart},
+      "id": ${dayNum},
       "date": "Wed, Mar 25",
       "title": "Travel to Seoul & Explore Myeongdong",
       "city": "seoul",
@@ -1471,8 +1481,8 @@ CRITICAL: Return ONLY a raw JSON object. No markdown fences, no explanation. Sta
 }
 
 ${PARSE_RULES}
-- Number days with their actual ordinal position in the full itinerary (day #${dayStart} gets "id": ${dayStart}, etc.).
-- "totalDaysFound": count ALL day headers in the entire CSV (not just the ones you're outputting). This helps verify completeness.`;
+- "id" must be exactly ${dayNum}.
+- Only output this single day. Do not output any other days.`;
 }
 
 async function claudeParse(csv) {
@@ -1507,89 +1517,92 @@ async function claudeParse(csv) {
     console.log(`[claudeParse] Large itinerary (${itineraryCsv.length} chars), using chunked parsing directly.`);
   }
 
-  // ── Chunked parsing: 1 day per call, full CSV context each time ──
-  // Sends the ENTIRE CSV each call but tells Claude to output only one day.
-  // A single day with 10+ stops needs ~1500-2000 tokens; max_tokens=5000
-  // gives plenty of headroom and is safely under the 8000/request hard limit.
-  const DAYS_PER_CHUNK = 1;
-  const CHUNK_MAX_TOKENS = 5000;
+  // ── Step 1: Ask Claude to list ALL day headers in order ──
+  // This is a tiny output (~500 tokens) and is 100% reliable since it's a
+  // simple extraction task. We get the exact header text for every day so
+  // subsequent calls can find each day by header — no counting, no ambiguity.
+  setMsg('Claude is scanning your itinerary…');
+  console.log('[claudeParse] Step 1: fetching day header inventory…');
+  const inventoryText = await claudeCall(
+    [{ role:'user', content: buildDayInventoryPrompt(itineraryCsv) }],
+    1000,
+    (attempt, max) => setMsg(`Claude is re-scanning... (retry ${attempt} of ${max})`)
+  );
+  console.log('[claudeParse] Inventory raw response:', inventoryText);
 
+  let dayHeaders; // [{n, header}, ...]
+  try {
+    const arrStr = inventoryText.includes('[')
+      ? inventoryText.slice(inventoryText.indexOf('['), inventoryText.lastIndexOf(']')+1)
+      : inventoryText;
+    dayHeaders = JSON.parse(arrStr);
+  } catch(e) {
+    console.error('[claudeParse] Inventory JSON parse failed:', inventoryText);
+    throw new Error('Could not read day list from itinerary. Check console for details.');
+  }
+  console.log(`[claudeParse] ✓ Inventory: ${dayHeaders.length} days found:`, dayHeaders.map(d=>`${d.n}:${d.header}`).join(', '));
+
+  // ── Step 2: Parse each day by its exact header text ──
+  // Claude finds each day by looking for the specific header string in the CSV,
+  // then parses its stop rows. No counting, no ordinal confusion.
+  const CHUNK_MAX_TOKENS = 5000;
   const CITY_ORDER = ['seoul','tokyo','fuji','kyoto','osaka','nara'];
   let tripName = '';
   let dateRange = '';
-  let totalDaysFound = 0;
   const seenCities = new Set();
   const allDays = [];
-  let dayStart = 1;
-  let chunkNum = 0;
 
-  while (true) {
-    chunkNum++;
-    const dayEnd = dayStart + DAYS_PER_CHUNK - 1;
+  for (let i = 0; i < dayHeaders.length; i++) {
+    const { n: dayNum, header: dayHeader } = dayHeaders[i];
+    setMsg(`Claude is reading day ${i+1} of ${dayHeaders.length}: ${dayHeader}…`);
+    console.log(`[claudeParse] Parsing day ${i+1}/${dayHeaders.length}: "${dayHeader}"`);
 
-    setMsg(`Claude is reading your itinerary… (day ${dayStart} of ${totalDaysFound || '?'})`);
-    console.log(`[claudeParse] Chunk ${chunkNum}: requesting day ${dayStart}`);
-
-    const chunkPrompt = buildChunkedParsePrompt(
+    const dayPrompt = buildSingleDayParsePrompt(
       itineraryCsv,
-      extraSections,
-      dayStart,
-      dayEnd
+      dayHeader,
+      dayNum,
+      dayHeaders.length,
+      i === 0 ? extraSections : ''
     );
-    const ctext = await claudeCall([{ role:'user', content:chunkPrompt }], CHUNK_MAX_TOKENS, (attempt, max) => {
-      setMsg(`Claude is re-reading day ${dayStart}... (retry ${attempt} of ${max})`);
-    });
+    const ctext = await claudeCall(
+      [{ role:'user', content: dayPrompt }],
+      CHUNK_MAX_TOKENS,
+      (attempt, max) => setMsg(`Re-reading day ${i+1}... (retry ${attempt} of ${max})`)
+    );
 
-    console.log(`[claudeParse] Chunk ${chunkNum} raw (${ctext.length} chars):`, ctext);
+    console.log(`[claudeParse] Day ${i+1} raw (${ctext.length} chars):`, ctext);
 
     const cjson = ctext.includes('{') ? ctext.slice(ctext.indexOf('{'), ctext.lastIndexOf('}')+1) : ctext;
     let parsed;
     try {
       parsed = JSON.parse(cjson);
     } catch(e) {
-      console.error(`[claudeParse] Chunk ${chunkNum} JSON parse FAILED. Full response:`, ctext);
-      throw new Error(`Claude returned invalid JSON for day ${dayStart}: "${ctext.slice(0, 120)}..."`);
+      console.error(`[claudeParse] Day ${i+1} JSON parse FAILED. Full response:`, ctext);
+      throw new Error(`Claude returned invalid JSON for day ${i+1} ("${dayHeader}"): "${ctext.slice(0,120)}..."`);
     }
 
-    const chunkDays = parsed.days || [];
-    console.log(`[claudeParse] Chunk ${chunkNum} ✓ parsed days:`, JSON.stringify(chunkDays, null, 2));
-
-    // Grab totalDaysFound + metadata from first chunk
-    if (chunkNum === 1) {
-      totalDaysFound = parsed.totalDaysFound || 0;
-      tripName = parsed.tripName || '';
-      dateRange = parsed.dateRange || '';
-      console.log(`[claudeParse] Claude reports ${totalDaysFound} total days in CSV`);
-    }
-
-    // Collect cities
-    chunkDays.forEach(day => {
-      (day.cities || []).forEach(c => seenCities.add(c));
-      if (day.city) seenCities.add(day.city);
-    });
-
-    // Append — days are never split across chunks
-    allDays.push(...chunkDays);
-
-    // Determine if we need another chunk
-    const maxDay = Math.max(totalDaysFound, ...chunkDays.map(d => d.id || 0));
-    dayStart = dayEnd + 1;
-
-    if (chunkDays.length === 0 || dayStart > maxDay) {
-      break;
+    const dayResult = (parsed.days || [])[0];
+    if (!dayResult) {
+      console.warn(`[claudeParse] Day ${i+1} ("${dayHeader}") returned no day object — skipping`);
+    } else {
+      console.log(`[claudeParse] Day ${i+1} ✓:`, JSON.stringify(dayResult, null, 2));
+      // Collect trip metadata from first day
+      if (i === 0) {
+        tripName = parsed.tripName || '';
+        dateRange = parsed.dateRange || '';
+      }
+      (dayResult.cities || []).forEach(c => seenCities.add(c));
+      if (dayResult.city) seenCities.add(dayResult.city);
+      allDays.push(dayResult);
     }
 
     // Pause between requests to avoid Cloudflare/Anthropic rate limiting
-    await new Promise(r => setTimeout(r, 3000));
-
-    // Safety: max 50 chunks
-    if (chunkNum >= 50) {
-      console.warn('[claudeParse] Hit max chunk limit (50). Stopping.');
-      break;
+    if (i < dayHeaders.length - 1) {
+      await new Promise(r => setTimeout(r, 3000));
     }
   }
 
-  // Re-number days sequentially
+  // Re-number days sequentially (1, 2, 3...) to match their order in allDays
   allDays.forEach((day, idx) => { day.id = idx + 1; });
   const cities = CITY_ORDER.filter(c => seenCities.has(c));
   console.log('[claudeParse] ✓ Total', allDays.length, 'days,',
