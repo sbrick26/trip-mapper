@@ -1249,12 +1249,16 @@ async function claudeCall(messages, maxTokens = 6000, onRetry = null) {
       // Error responses (worker returns JSON for 4xx/5xx)
       if (!res.ok) {
         clearTimeout(timeoutId);
+        // Hard fail on non-retryable 4xx (except 429 rate limit which we retry)
         if (res.status >= 400 && res.status < 500 && res.status !== 429) {
           const e = await res.json().catch(() => ({}));
           throw new Error(e?.error?.message || `Claude API error ${res.status}`);
         }
         if (attempt < maxRetries) {
-          const delayMs = baseDelay * Math.pow(2, attempt);
+          // 429 rate limit needs a longer wait than other errors
+          const delayMs = res.status === 429
+            ? Math.max(15000, baseDelay * Math.pow(2, attempt)) // min 15s for rate limits
+            : baseDelay * Math.pow(2, attempt);
           console.warn(`[claudeCall] Attempt ${attempt + 1} failed (HTTP ${res.status}), retrying in ${delayMs / 1000}s...`);
           if (onRetry) onRetry(attempt + 1, maxRetries);
           await new Promise(r => setTimeout(r, delayMs));
@@ -1574,6 +1578,9 @@ async function claudeParse(csv) {
     if (chunkDays.length === 0 || dayStart > maxDay) {
       break;
     }
+
+    // Pause between requests to avoid Cloudflare/Anthropic rate limiting
+    await new Promise(r => setTimeout(r, 3000));
 
     // Safety: max 50 chunks
     if (chunkNum >= 50) {
